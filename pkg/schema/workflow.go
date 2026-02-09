@@ -37,7 +37,14 @@ const (
 	StepTypeReasoning StepType = "reasoning"
 	StepTypeParallel  StepType = "parallel"
 	StepTypeLoop      StepType = "loop"
+	StepTypeWait      StepType = "wait"
 )
+
+// WaitConfig is the config block for wait-type steps.
+type WaitConfig struct {
+	Duration string `json:"duration,omitempty"` // e.g. "5s", "1m"
+	Signal   string `json:"signal,omitempty"`   // wait for named signal
+}
 
 // RetryPolicy configures retry behavior for a step.
 type RetryPolicy struct {

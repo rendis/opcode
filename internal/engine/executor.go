@@ -99,6 +99,7 @@ type executorImpl struct {
 	config       ExecutorConfig
 	circuitBkr   *CircuitBreakerRegistry
 	interpolator *expressions.Interpolator
+	celEngine    *expressions.CELEngine
 
 	// mu guards running map.
 	mu      sync.Mutex
@@ -136,6 +137,9 @@ func NewExecutor(s store.Store, el EventLogger, registry actions.ActionRegistry,
 		v = vault[0]
 	}
 
+	// CEL engine is optional — flow control steps check nil before use.
+	celEngine, _ := expressions.NewCELEngine()
+
 	return &executorImpl{
 		store:        s,
 		eventLog:     el,
@@ -146,6 +150,7 @@ func NewExecutor(s store.Store, el EventLogger, registry actions.ActionRegistry,
 		config:       cfg,
 		circuitBkr:   NewCircuitBreakerRegistry(cbConfig),
 		interpolator: expressions.NewInterpolator(v),
+		celEngine:    celEngine,
 		running:      make(map[string]*workflowRun),
 	}
 }
@@ -742,11 +747,19 @@ func (e *executorImpl) executeStep(ctx context.Context, run *workflowRun, workfl
 			}
 		}
 
-	case schema.StepTypeAction, "":
-		output, execErr = e.executeActionStep(stepCtx, run, workflowID, stepDef, params)
+	case schema.StepTypeCondition:
+		output, execErr = e.executeConditionStep(stepCtx, run, workflowID, stepID, stepDef, params)
 
-	default:
-		// Condition, parallel, loop — Cycle 2.
+	case schema.StepTypeLoop:
+		output, execErr = e.executeLoopStep(stepCtx, run, workflowID, stepID, stepDef, params)
+
+	case schema.StepTypeParallel:
+		output, execErr = e.executeParallelStep(stepCtx, run, workflowID, stepID, stepDef, params)
+
+	case schema.StepTypeWait:
+		output, execErr = e.executeWaitStep(stepCtx, run, workflowID, stepID, stepDef, params)
+
+	case schema.StepTypeAction, "":
 		output, execErr = e.executeActionStep(stepCtx, run, workflowID, stepDef, params)
 	}
 
@@ -1204,12 +1217,29 @@ func (e *executorImpl) buildInterpolationScope(run *workflowRun, workflowID stri
 		}
 	}
 
-	return &expressions.InterpolationScope{
+	scope := &expressions.InterpolationScope{
 		Steps:    stepOutputs,
 		Inputs:   params,
 		Workflow: wfMeta,
 		Context:  ctxData,
 	}
+
+	// Inject loop variables if passed through enriched params.
+	if loopVars, ok := params["__loop_vars__"]; ok {
+		if lv, ok := loopVars.(*expressions.LoopScope); ok {
+			scope.Loop = lv
+		}
+		// Remove the internal key from the inputs view.
+		cleanInputs := make(map[string]any, len(params)-1)
+		for k, v := range params {
+			if k != "__loop_vars__" {
+				cleanInputs[k] = v
+			}
+		}
+		scope.Inputs = cleanInputs
+	}
+
+	return scope
 }
 
 func (e *executorImpl) finalizeResult(ctx context.Context, run *workflowRun, result *ExecutionResult) {

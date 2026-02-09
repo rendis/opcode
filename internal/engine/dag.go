@@ -25,6 +25,7 @@ var validStepTypes = map[schema.StepType]bool{
 	schema.StepTypeReasoning: true,
 	schema.StepTypeParallel:  true,
 	schema.StepTypeLoop:      true,
+	schema.StepTypeWait:      true,
 }
 
 // ParseDAG parses a WorkflowDefinition into an executable DAG.
@@ -235,6 +236,18 @@ func validateStepConfig(step *schema.StepDefinition) error {
 		}
 		if len(cfg.Options) == 0 {
 			return schema.NewErrorf(schema.ErrCodeValidation, "reasoning step %s has no options", step.ID)
+		}
+
+	case schema.StepTypeWait:
+		if len(step.Config) == 0 {
+			return schema.NewErrorf(schema.ErrCodeValidation, "wait step %s has no config", step.ID)
+		}
+		var cfg schema.WaitConfig
+		if err := json.Unmarshal(step.Config, &cfg); err != nil {
+			return schema.NewErrorf(schema.ErrCodeValidation, "wait step %s has invalid config: %v", step.ID, err)
+		}
+		if cfg.Duration == "" && cfg.Signal == "" {
+			return schema.NewErrorf(schema.ErrCodeValidation, "wait step %s must have duration or signal", step.ID)
 		}
 
 	case schema.StepTypeAction:

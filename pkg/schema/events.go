@@ -31,6 +31,15 @@ const (
 	EventCircuitBreakerClosed   = "circuit_breaker_closed"
 	EventStepFallback        = "step_fallback"
 	EventStepIgnored         = "step_ignored"
+
+	EventConditionEvaluated = "condition_evaluated"
+	EventLoopIterStarted    = "loop_iter_started"
+	EventLoopIterCompleted  = "loop_iter_completed"
+	EventLoopCompleted      = "loop_completed"
+	EventParallelStarted    = "parallel_started"
+	EventParallelCompleted  = "parallel_completed"
+	EventWaitStarted        = "wait_started"
+	EventWaitCompleted      = "wait_completed"
 )
 
 // WorkflowStatus represents the lifecycle state of a workflow.

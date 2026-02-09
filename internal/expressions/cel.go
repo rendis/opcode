@@ -33,6 +33,7 @@ func NewCELEngine() (*CELEngine, error) {
 		cel.Variable("inputs", mapType),
 		cel.Variable("workflow", mapType),
 		cel.Variable("context", mapType),
+		cel.Variable("iter", mapType),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create CEL environment: %w", err)
@@ -118,9 +119,9 @@ func (e *CELEngine) getOrCompile(expression string) (cel.Program, error) {
 // buildActivation creates the evaluation activation map from the data.
 // Missing keys default to empty maps to prevent CEL runtime nil-ref errors.
 func buildActivation(data map[string]any) map[string]any {
-	activation := make(map[string]any, 4)
+	activation := make(map[string]any, 5)
 
-	for _, key := range []string{"steps", "inputs", "workflow", "context"} {
+	for _, key := range []string{"steps", "inputs", "workflow", "context", "iter"} {
 		if v, ok := data[key]; ok && v != nil {
 			activation[key] = v
 		} else {
