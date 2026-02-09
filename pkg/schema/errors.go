@@ -22,6 +22,8 @@ const (
 	ErrCodePermissionDenied = "PERMISSION_DENIED"
 	ErrCodeActionUnavailable  = "ACTION_UNAVAILABLE"
 	ErrCodeAssertionFailed   = "ASSERTION_FAILED"
+	ErrCodeIsolation         = "ISOLATION_ERROR"
+	ErrCodePathDenied        = "PATH_DENIED"
 )
 
 // OpcodeError is the structured error type for all OPCODE operations.
@@ -83,6 +85,7 @@ var nonRetryableCodes = map[string]bool{
 	ErrCodePermissionDenied: true,
 	ErrCodeCircuitOpen:       true,
 	ErrCodeAssertionFailed:  true,
+	ErrCodePathDenied:       true,
 }
 
 // IsRetryable returns whether this error should be retried.
