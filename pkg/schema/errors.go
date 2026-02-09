@@ -16,6 +16,12 @@ const (
 	ErrCodeSignalFailed    = "SIGNAL_FAILED"
 	ErrCodeRetryExhausted  = "RETRY_EXHAUSTED"
 	ErrCodeStore           = "STORE_ERROR"
+	ErrCodeInterpolation   = "INTERPOLATION_ERROR"
+	ErrCodeCircuitOpen     = "CIRCUIT_OPEN"
+	ErrCodeNonRetryable    = "NON_RETRYABLE"
+	ErrCodePermissionDenied = "PERMISSION_DENIED"
+	ErrCodeActionUnavailable  = "ACTION_UNAVAILABLE"
+	ErrCodeAssertionFailed   = "ASSERTION_FAILED"
 )
 
 // OpcodeError is the structured error type for all OPCODE operations.
@@ -64,4 +70,24 @@ func (e *OpcodeError) WithCause(err error) *OpcodeError {
 func (e *OpcodeError) WithDetails(details map[string]any) *OpcodeError {
 	e.Details = details
 	return e
+}
+
+// nonRetryableCodes are error codes that should never be retried.
+var nonRetryableCodes = map[string]bool{
+	ErrCodeValidation:       true,
+	ErrCodeNotFound:         true,
+	ErrCodeConflict:         true,
+	ErrCodeInvalidTransition: true,
+	ErrCodeCycleDetected:    true,
+	ErrCodeNonRetryable:     true,
+	ErrCodePermissionDenied: true,
+	ErrCodeCircuitOpen:       true,
+	ErrCodeAssertionFailed:  true,
+}
+
+// IsRetryable returns whether this error should be retried.
+// Non-retryable: validation, permission denied, not found, conflict.
+// Retryable: execution errors, timeouts, store errors.
+func (e *OpcodeError) IsRetryable() bool {
+	return !nonRetryableCodes[e.Code]
 }

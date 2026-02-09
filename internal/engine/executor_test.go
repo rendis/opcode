@@ -893,18 +893,15 @@ func TestExecutor_Run_StepParamsPassedToAction(t *testing.T) {
 }
 
 func TestExecutor_Run_BackoffExponential(t *testing.T) {
-	te := newTestEnv()
-	impl := te.executor.(*executorImpl)
-
 	policy := &schema.RetryPolicy{
 		Max:     3,
 		Backoff: "exponential",
 		Delay:   "10ms",
 	}
 
-	d0 := impl.computeBackoff(policy, 0) // 10ms * 2^0 = 10ms
-	d1 := impl.computeBackoff(policy, 1) // 10ms * 2^1 = 20ms
-	d2 := impl.computeBackoff(policy, 2) // 10ms * 2^2 = 40ms
+	d0 := ComputeBackoff(policy, 0) // 10ms * 2^0 = 10ms
+	d1 := ComputeBackoff(policy, 1) // 10ms * 2^1 = 20ms
+	d2 := ComputeBackoff(policy, 2) // 10ms * 2^2 = 40ms
 
 	assert.Equal(t, 10*time.Millisecond, d0)
 	assert.Equal(t, 20*time.Millisecond, d1)
@@ -912,18 +909,15 @@ func TestExecutor_Run_BackoffExponential(t *testing.T) {
 }
 
 func TestExecutor_Run_BackoffLinear(t *testing.T) {
-	te := newTestEnv()
-	impl := te.executor.(*executorImpl)
-
 	policy := &schema.RetryPolicy{
 		Max:     3,
 		Backoff: "linear",
 		Delay:   "10ms",
 	}
 
-	d0 := impl.computeBackoff(policy, 0) // 10ms * 1 = 10ms
-	d1 := impl.computeBackoff(policy, 1) // 10ms * 2 = 20ms
-	d2 := impl.computeBackoff(policy, 2) // 10ms * 3 = 30ms
+	d0 := ComputeBackoff(policy, 0) // 10ms * 1 = 10ms
+	d1 := ComputeBackoff(policy, 1) // 10ms * 2 = 20ms
+	d2 := ComputeBackoff(policy, 2) // 10ms * 3 = 30ms
 
 	assert.Equal(t, 10*time.Millisecond, d0)
 	assert.Equal(t, 20*time.Millisecond, d1)
@@ -1103,6 +1097,272 @@ func TestExecutor_Run_MultipleFailuresInParallel(t *testing.T) {
 	for _, sid := range []string{"s1", "s2", "s3"} {
 		assert.Contains(t, result.Steps, sid)
 	}
+}
+
+// --- Error Handler Integration Tests ---
+
+func TestExecutor_OnError_Ignore(t *testing.T) {
+	te := newTestEnv()
+
+	te.registry.Register(&mockAction{
+		name: "fail_action",
+		execFn: func(_ context.Context, _ actions.ActionInput) (*actions.ActionOutput, error) {
+			return nil, errors.New("something broke")
+		},
+	})
+	te.registry.Register(&mockAction{name: "next_action"})
+
+	// Step s1 fails but has on_error: ignore. Step s2 should still run.
+	wf := newWorkflow("wf-ignore",
+		schema.StepDefinition{
+			ID:     "s1",
+			Type:   schema.StepTypeAction,
+			Action: "fail_action",
+			OnError: &schema.ErrorHandler{Strategy: schema.ErrorStrategyIgnore},
+		},
+		schema.StepDefinition{
+			ID:        "s2",
+			Type:      schema.StepTypeAction,
+			Action:    "next_action",
+			DependsOn: []string{"s1"},
+		},
+	)
+	te.store.CreateWorkflow(context.Background(), wf)
+
+	result, err := te.executor.Run(context.Background(), wf, nil)
+	require.NoError(t, err)
+	assert.Equal(t, schema.WorkflowStatusCompleted, result.Status)
+	assert.Equal(t, schema.StepStatusCompleted, result.Steps["s1"].Status) // ignored = completed
+	assert.Equal(t, schema.StepStatusCompleted, result.Steps["s2"].Status)
+}
+
+func TestExecutor_OnError_FailWorkflow(t *testing.T) {
+	te := newTestEnv()
+
+	te.registry.Register(&mockAction{
+		name: "fail_action",
+		execFn: func(_ context.Context, _ actions.ActionInput) (*actions.ActionOutput, error) {
+			return nil, errors.New("critical failure")
+		},
+	})
+
+	wf := newWorkflow("wf-fail-wf",
+		schema.StepDefinition{
+			ID:     "s1",
+			Type:   schema.StepTypeAction,
+			Action: "fail_action",
+			OnError: &schema.ErrorHandler{Strategy: schema.ErrorStrategyFailWorkflow},
+		},
+	)
+	te.store.CreateWorkflow(context.Background(), wf)
+
+	result, err := te.executor.Run(context.Background(), wf, nil)
+	require.NoError(t, err)
+	assert.Equal(t, schema.WorkflowStatusFailed, result.Status)
+	assert.NotNil(t, result.Error)
+}
+
+func TestExecutor_OnError_FallbackStep(t *testing.T) {
+	te := newTestEnv()
+
+	te.registry.Register(&mockAction{
+		name: "fail_action",
+		execFn: func(_ context.Context, _ actions.ActionInput) (*actions.ActionOutput, error) {
+			return nil, errors.New("primary failed")
+		},
+	})
+	te.registry.Register(&mockAction{
+		name: "recovery",
+		execFn: func(_ context.Context, _ actions.ActionInput) (*actions.ActionOutput, error) {
+			return &actions.ActionOutput{Data: json.RawMessage(`{"recovered":true}`)}, nil
+		},
+	})
+
+	wf := newWorkflow("wf-fallback",
+		schema.StepDefinition{
+			ID:     "s1",
+			Type:   schema.StepTypeAction,
+			Action: "fail_action",
+			OnError: &schema.ErrorHandler{
+				Strategy:     schema.ErrorStrategyFallbackStep,
+				FallbackStep: "recovery_step",
+			},
+		},
+		schema.StepDefinition{
+			ID:     "recovery_step",
+			Type:   schema.StepTypeAction,
+			Action: "recovery",
+		},
+	)
+	te.store.CreateWorkflow(context.Background(), wf)
+
+	result, err := te.executor.Run(context.Background(), wf, nil)
+	require.NoError(t, err)
+	// The original step s1 is failed, but recovery_step runs and workflow completes.
+	assert.Equal(t, schema.WorkflowStatusCompleted, result.Status)
+	assert.Equal(t, schema.StepStatusFailed, result.Steps["s1"].Status)
+	assert.Equal(t, schema.StepStatusCompleted, result.Steps["recovery_step"].Status)
+}
+
+func TestExecutor_NonRetryableError_SkipsRetry(t *testing.T) {
+	te := newTestEnv()
+
+	callCount := 0
+	te.registry.Register(&mockAction{
+		name: "validation_fail",
+		execFn: func(_ context.Context, _ actions.ActionInput) (*actions.ActionOutput, error) {
+			callCount++
+			return nil, schema.NewError(schema.ErrCodeValidation, "invalid input")
+		},
+	})
+
+	wf := newWorkflow("wf-noretry", schema.StepDefinition{
+		ID:     "s1",
+		Type:   schema.StepTypeAction,
+		Action: "validation_fail",
+		Retry:  &schema.RetryPolicy{Max: 3, Backoff: "none"},
+	})
+	te.store.CreateWorkflow(context.Background(), wf)
+
+	result, err := te.executor.Run(context.Background(), wf, nil)
+	require.NoError(t, err)
+	assert.Equal(t, schema.WorkflowStatusFailed, result.Status)
+	// Should only be called once — validation errors are not retryable.
+	assert.Equal(t, 1, callCount)
+	assert.Equal(t, schema.ErrCodeNonRetryable, result.Error.Code)
+}
+
+func TestExecutor_RetryWithMaxDelay(t *testing.T) {
+	te := newTestEnv()
+
+	callCount := 0
+	te.registry.Register(&mockAction{
+		name: "flaky_capped",
+		execFn: func(_ context.Context, _ actions.ActionInput) (*actions.ActionOutput, error) {
+			callCount++
+			if callCount < 3 {
+				return nil, errors.New("transient error")
+			}
+			return &actions.ActionOutput{Data: json.RawMessage(`{"ok":true}`)}, nil
+		},
+	})
+
+	wf := newWorkflow("wf-maxdelay", schema.StepDefinition{
+		ID:     "s1",
+		Type:   schema.StepTypeAction,
+		Action: "flaky_capped",
+		Retry: &schema.RetryPolicy{
+			Max:      5,
+			Backoff:  "exponential",
+			Delay:    "1ms",
+			MaxDelay: "5ms",
+		},
+	})
+	te.store.CreateWorkflow(context.Background(), wf)
+
+	result, err := te.executor.Run(context.Background(), wf, nil)
+	require.NoError(t, err)
+	assert.Equal(t, schema.WorkflowStatusCompleted, result.Status)
+	assert.Equal(t, 3, callCount)
+}
+
+func TestExecutor_RetryEventsLogged(t *testing.T) {
+	te := newTestEnv()
+
+	callCount := 0
+	te.registry.Register(&mockAction{
+		name: "flaky_logged",
+		execFn: func(_ context.Context, _ actions.ActionInput) (*actions.ActionOutput, error) {
+			callCount++
+			if callCount < 2 {
+				return nil, errors.New("transient")
+			}
+			return &actions.ActionOutput{Data: json.RawMessage(`{"ok":true}`)}, nil
+		},
+	})
+
+	wf := newWorkflow("wf-retry-events", schema.StepDefinition{
+		ID:     "s1",
+		Type:   schema.StepTypeAction,
+		Action: "flaky_logged",
+		Retry:  &schema.RetryPolicy{Max: 3, Backoff: "none"},
+	})
+	te.store.CreateWorkflow(context.Background(), wf)
+
+	result, err := te.executor.Run(context.Background(), wf, nil)
+	require.NoError(t, err)
+	assert.Equal(t, schema.WorkflowStatusCompleted, result.Status)
+
+	// Check that retry attempt events were logged.
+	te.store.mu.Lock()
+	var retryAttemptEvents int
+	for _, e := range te.store.events {
+		if e.Type == schema.EventStepRetryAttempt {
+			retryAttemptEvents++
+		}
+	}
+	te.store.mu.Unlock()
+	assert.GreaterOrEqual(t, retryAttemptEvents, 1)
+}
+
+func TestExecutor_CircuitBreaker_BlocksAfterFailures(t *testing.T) {
+	cbConfig := CircuitBreakerConfig{
+		FailureThreshold: 2,
+		Cooldown:         10 * time.Second,
+		HalfOpenMax:      1,
+	}
+
+	ms := newMockStore()
+	mel := &mockEventLog{store: ms}
+	reg := newMockRegistry()
+
+	exec := NewExecutor(ms, mel, reg, ExecutorConfig{
+		PoolSize:       4,
+		CircuitBreaker: &cbConfig,
+	})
+
+	reg.Register(&mockAction{
+		name: "fragile",
+		execFn: func(_ context.Context, _ actions.ActionInput) (*actions.ActionOutput, error) {
+			return nil, errors.New("fragile action failed")
+		},
+	})
+
+	// Run first workflow — circuit breaker records failure.
+	wf1 := newWorkflow("wf-cb1", execActionStep("s1", "fragile"))
+	ms.CreateWorkflow(context.Background(), wf1)
+	result1, _ := exec.Run(context.Background(), wf1, nil)
+	assert.Equal(t, schema.WorkflowStatusFailed, result1.Status)
+
+	// Run second workflow — another failure, circuit opens.
+	wf2 := newWorkflow("wf-cb2", execActionStep("s1", "fragile"))
+	ms.CreateWorkflow(context.Background(), wf2)
+	result2, _ := exec.Run(context.Background(), wf2, nil)
+	assert.Equal(t, schema.WorkflowStatusFailed, result2.Status)
+
+	// Run third workflow — circuit should be open, rejecting immediately.
+	wf3 := newWorkflow("wf-cb3", execActionStep("s1", "fragile"))
+	ms.CreateWorkflow(context.Background(), wf3)
+	result3, _ := exec.Run(context.Background(), wf3, nil)
+	assert.Equal(t, schema.WorkflowStatusFailed, result3.Status)
+	// The error should be circuit-open related.
+	assert.NotNil(t, result3.Error)
+}
+
+func TestExecutor_BackoffConstant(t *testing.T) {
+	policy := &schema.RetryPolicy{
+		Max:     3,
+		Backoff: "constant",
+		Delay:   "10ms",
+	}
+
+	d0 := ComputeBackoff(policy, 0)
+	d1 := ComputeBackoff(policy, 1)
+	d2 := ComputeBackoff(policy, 2)
+
+	assert.Equal(t, 10*time.Millisecond, d0)
+	assert.Equal(t, 10*time.Millisecond, d1)
+	assert.Equal(t, 10*time.Millisecond, d2)
 }
 
 // --- Utility ---

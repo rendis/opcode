@@ -24,7 +24,7 @@ type StepDefinition struct {
 	Condition string          `json:"condition,omitempty"`  // CEL expression, evaluated before execution
 	Retry     *RetryPolicy    `json:"retry,omitempty"`
 	Timeout   string          `json:"timeout,omitempty"`    // step-level timeout (e.g. "30s", "5m")
-	OnError   string          `json:"on_error,omitempty"`   // step ID to jump to on error
+	OnError   *ErrorHandler   `json:"on_error,omitempty"`   // error handling strategy
 	Config    json.RawMessage `json:"config,omitempty"`     // type-specific config (reasoning nodes, parallel, loop)
 }
 
@@ -41,10 +41,31 @@ const (
 
 // RetryPolicy configures retry behavior for a step.
 type RetryPolicy struct {
-	Max     int    `json:"max"`                // max retry attempts
-	Backoff string `json:"backoff,omitempty"`   // none | linear | exponential (default: none)
-	Delay   string `json:"delay,omitempty"`     // initial delay (e.g. "1s", "500ms")
+	Max      int    `json:"max"`                 // max retry attempts
+	Backoff  string `json:"backoff,omitempty"`    // none | linear | exponential | constant (default: none)
+	Delay    string `json:"delay,omitempty"`      // initial delay (e.g. "1s", "500ms")
+	MaxDelay string `json:"max_delay,omitempty"`  // cap on backoff delay (e.g. "30s")
 }
+
+// ErrorHandler configures what happens when a step fails after retries are exhausted.
+type ErrorHandler struct {
+	Strategy     ErrorStrategy `json:"strategy"`                // ignore | fail_workflow | fallback_step | retry
+	FallbackStep string       `json:"fallback_step,omitempty"` // step ID to jump to (for fallback_step strategy)
+}
+
+// ErrorStrategy enumerates error handling strategies for steps.
+type ErrorStrategy string
+
+const (
+	// ErrorStrategyIgnore marks the step as skipped and continues the workflow.
+	ErrorStrategyIgnore ErrorStrategy = "ignore"
+	// ErrorStrategyFailWorkflow fails the entire workflow immediately.
+	ErrorStrategyFailWorkflow ErrorStrategy = "fail_workflow"
+	// ErrorStrategyFallbackStep executes a designated fallback step instead.
+	ErrorStrategyFallbackStep ErrorStrategy = "fallback_step"
+	// ErrorStrategyRetry defers to the retry policy (default behavior if retry is configured).
+	ErrorStrategyRetry ErrorStrategy = "retry"
+)
 
 // ReasoningConfig is the config block for reasoning-type steps.
 type ReasoningConfig struct {

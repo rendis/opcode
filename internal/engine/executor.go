@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/rendis/opcode/internal/actions"
+	"github.com/rendis/opcode/internal/expressions"
+	"github.com/rendis/opcode/internal/secrets"
 	"github.com/rendis/opcode/internal/store"
 	"github.com/rendis/opcode/pkg/schema"
 )
@@ -82,18 +84,21 @@ const DefaultOnTimeout = "fail"
 
 // ExecutorConfig holds configuration for the executor.
 type ExecutorConfig struct {
-	PoolSize int // max concurrent step goroutines
+	PoolSize       int                  // max concurrent step goroutines
+	CircuitBreaker *CircuitBreakerConfig // circuit breaker config (nil = defaults)
 }
 
 // executorImpl is the concrete Executor implementation.
 type executorImpl struct {
-	store    store.Store
-	eventLog EventLogger
-	wfFSM    *WorkflowFSM
-	stepFSM  *StepFSM
-	actions  actions.ActionRegistry
-	pool     *WorkerPool
-	config   ExecutorConfig
+	store        store.Store
+	eventLog     EventLogger
+	wfFSM        *WorkflowFSM
+	stepFSM      *StepFSM
+	actions      actions.ActionRegistry
+	pool         *WorkerPool
+	config       ExecutorConfig
+	circuitBkr   *CircuitBreakerRegistry
+	interpolator *expressions.Interpolator
 
 	// mu guards running map.
 	mu      sync.Mutex
@@ -111,7 +116,8 @@ type workflowRun struct {
 }
 
 // NewExecutor creates a new Executor with the given dependencies.
-func NewExecutor(s store.Store, el EventLogger, registry actions.ActionRegistry, cfg ExecutorConfig) Executor {
+// vault is optional (nil = secrets interpolation disabled).
+func NewExecutor(s store.Store, el EventLogger, registry actions.ActionRegistry, cfg ExecutorConfig, vault ...secrets.Vault) Executor {
 	if cfg.PoolSize <= 0 {
 		cfg.PoolSize = DefaultPoolSize
 	}
@@ -120,15 +126,27 @@ func NewExecutor(s store.Store, el EventLogger, registry actions.ActionRegistry,
 	stepFSM := NewStepFSM(el)
 	pool := NewWorkerPool(cfg.PoolSize)
 
+	cbConfig := DefaultCircuitBreakerConfig()
+	if cfg.CircuitBreaker != nil {
+		cbConfig = *cfg.CircuitBreaker
+	}
+
+	var v secrets.Vault
+	if len(vault) > 0 && vault[0] != nil {
+		v = vault[0]
+	}
+
 	return &executorImpl{
-		store:    s,
-		eventLog: el,
-		wfFSM:    wfFSM,
-		stepFSM:  stepFSM,
-		actions:  registry,
-		pool:     pool,
-		config:   cfg,
-		running:  make(map[string]*workflowRun),
+		store:        s,
+		eventLog:     el,
+		wfFSM:        wfFSM,
+		stepFSM:      stepFSM,
+		actions:      registry,
+		pool:         pool,
+		config:       cfg,
+		circuitBkr:   NewCircuitBreakerRegistry(cbConfig),
+		interpolator: expressions.NewInterpolator(v),
+		running:      make(map[string]*workflowRun),
 	}
 }
 
@@ -725,11 +743,11 @@ func (e *executorImpl) executeStep(ctx context.Context, run *workflowRun, workfl
 		}
 
 	case schema.StepTypeAction, "":
-		output, execErr = e.executeActionStep(stepCtx, stepDef, params)
+		output, execErr = e.executeActionStep(stepCtx, run, workflowID, stepDef, params)
 
 	default:
 		// Condition, parallel, loop — Cycle 2.
-		output, execErr = e.executeActionStep(stepCtx, stepDef, params)
+		output, execErr = e.executeActionStep(stepCtx, run, workflowID, stepDef, params)
 	}
 
 	// Handle step timeout.
@@ -761,16 +779,32 @@ func (e *executorImpl) executeStep(ctx context.Context, run *workflowRun, workfl
 }
 
 // executeActionStep runs an action-type step via the action registry.
-func (e *executorImpl) executeActionStep(ctx context.Context, stepDef *schema.StepDefinition, params map[string]any) (json.RawMessage, error) {
+func (e *executorImpl) executeActionStep(ctx context.Context, run *workflowRun, workflowID string, stepDef *schema.StepDefinition, params map[string]any) (json.RawMessage, error) {
+	// Check circuit breaker before executing.
+	if err := e.circuitBkr.AllowRequest(stepDef.Action); err != nil {
+		return nil, err
+	}
+
 	action, err := e.actions.Get(stepDef.Action)
 	if err != nil {
 		return nil, schema.NewErrorf(schema.ErrCodeExecution, "action %q not found: %s", stepDef.Action, err.Error())
 	}
 
-	// Build action input from step params + workflow params.
+	// Interpolate ${{...}} references in step params before execution.
+	interpolatedParams := stepDef.Params
+	if expressions.HasInterpolation(stepDef.Params) {
+		scope := e.buildInterpolationScope(run, workflowID, params)
+		interpolatedParams, err = e.interpolator.Resolve(ctx, stepDef.Params, scope)
+		if err != nil {
+			return nil, schema.NewErrorf(schema.ErrCodeInterpolation,
+				"interpolation failed for step action %q: %s", stepDef.Action, err.Error()).WithCause(err)
+		}
+	}
+
+	// Build action input from interpolated step params + workflow params.
 	stepParams := make(map[string]any)
-	if len(stepDef.Params) > 0 {
-		if err := json.Unmarshal(stepDef.Params, &stepParams); err != nil {
+	if len(interpolatedParams) > 0 {
+		if err := json.Unmarshal(interpolatedParams, &stepParams); err != nil {
 			return nil, schema.NewErrorf(schema.ErrCodeValidation, "unmarshal step params: %s", err.Error())
 		}
 	}
@@ -782,8 +816,23 @@ func (e *executorImpl) executeActionStep(ctx context.Context, stepDef *schema.St
 
 	out, err := action.Execute(ctx, input)
 	if err != nil {
+		// Record failure in circuit breaker.
+		newState := e.circuitBkr.RecordFailure(stepDef.Action)
+		if newState == CircuitOpen {
+			// Emit circuit breaker open event (best effort).
+			cbPayload, _ := json.Marshal(e.circuitBkr.GetStats(stepDef.Action))
+			_ = e.eventLog.AppendEvent(ctx, &store.Event{
+				WorkflowID: "", // filled by caller if needed
+				Type:       schema.EventCircuitBreakerOpen,
+				Payload:    cbPayload,
+			})
+		}
 		return nil, err
 	}
+
+	// Record success in circuit breaker.
+	e.circuitBkr.RecordSuccess(stepDef.Action)
+
 	if out != nil {
 		return out.Data, nil
 	}
@@ -862,15 +911,34 @@ func (e *executorImpl) executeReasoningStep(ctx context.Context, run *workflowRu
 	return nil
 }
 
-// handleStepFailure handles a step that errored, including retry logic and on_error jumps.
+// handleStepFailure handles a step that errored, including retry logic, retryable classification,
+// circuit breaker awareness, and on_error handler dispatch.
 func (e *executorImpl) handleStepFailure(ctx context.Context, run *workflowRun, workflowID, stepID string, stepDef *schema.StepDefinition, execErr error, params map[string]any) error {
 	run.mu.Lock()
 	ss := run.stepStates[stepID]
 	retryCount := ss.RetryCount
 	run.mu.Unlock()
 
-	// Check retry policy.
-	if stepDef.Retry != nil && retryCount < stepDef.Retry.Max {
+	// Check if the error is retryable before attempting retries.
+	retryable := IsRetryableError(execErr)
+
+	// Check retry policy — only retry if error is retryable.
+	if retryable && stepDef.Retry != nil && retryCount < stepDef.Retry.Max {
+		// Log retry attempt event.
+		retryPayload, _ := json.Marshal(map[string]any{
+			"step_id":      stepID,
+			"attempt":      retryCount + 1,
+			"max_attempts": stepDef.Retry.Max,
+			"error":        execErr.Error(),
+			"retryable":    true,
+		})
+		_ = e.eventLog.AppendEvent(ctx, &store.Event{
+			WorkflowID: workflowID,
+			StepID:     stepID,
+			Type:       schema.EventStepRetryAttempt,
+			Payload:    retryPayload,
+		})
+
 		// Transition: running → retrying.
 		if err := e.stepFSM.Transition(ctx, workflowID, stepID, schema.StepStatusRunning, schema.StepStatusRetrying); err != nil {
 			return err
@@ -882,14 +950,10 @@ func (e *executorImpl) handleStepFailure(ctx context.Context, run *workflowRun, 
 		run.mu.Unlock()
 		e.persistStepState(workflowID, stepID, run)
 
-		// Apply backoff delay.
-		delay := e.computeBackoff(stepDef.Retry, retryCount)
-		if delay > 0 {
-			select {
-			case <-time.After(delay):
-			case <-ctx.Done():
-				return ctx.Err()
-			}
+		// Apply backoff delay using the enhanced ComputeBackoff.
+		delay := ComputeBackoff(stepDef.Retry, retryCount)
+		if err := WaitForBackoff(ctx, delay); err != nil {
+			return err
 		}
 
 		// Transition: retrying → running.
@@ -913,9 +977,9 @@ func (e *executorImpl) handleStepFailure(ctx context.Context, run *workflowRun, 
 		var retryErr error
 		switch stepDef.Type {
 		case schema.StepTypeAction, "":
-			output, retryErr = e.executeActionStep(retryCtx, stepDef, params)
+			output, retryErr = e.executeActionStep(retryCtx, run, workflowID, stepDef, params)
 		default:
-			output, retryErr = e.executeActionStep(retryCtx, stepDef, params)
+			output, retryErr = e.executeActionStep(retryCtx, run, workflowID, stepDef, params)
 		}
 
 		if retryErr != nil {
@@ -937,7 +1001,42 @@ func (e *executorImpl) handleStepFailure(ctx context.Context, run *workflowRun, 
 		return nil
 	}
 
-	// Retries exhausted or no retry policy — fail the step.
+	// Retries exhausted or not retryable — consult on_error handler before failing.
+	handlerResult, _ := HandleStepError(ctx, e.eventLog, workflowID, stepID, stepDef.OnError, execErr)
+
+	if handlerResult != nil && handlerResult.Handled {
+		if handlerResult.FallbackStepID != "" {
+			// Execute fallback step: mark original as failed, run fallback.
+			e.failStep(ctx, run, workflowID, stepID, execErr)
+			return e.executeFallbackStep(ctx, run, workflowID, stepID, handlerResult.FallbackStepID, params)
+		}
+
+		if !handlerResult.ShouldFailWorkflow {
+			// "ignore" strategy: mark step as completed (error ignored) and continue.
+			e.ignoreStepError(ctx, run, workflowID, stepID)
+			return nil
+		}
+		// "fail_workflow" falls through to the normal failure path.
+	}
+
+	// Fail the step.
+	e.failStep(ctx, run, workflowID, stepID, execErr)
+
+	// Return appropriate error code.
+	if stepDef.Retry != nil && retryCount >= stepDef.Retry.Max {
+		return schema.NewErrorf(schema.ErrCodeRetryExhausted, "step %s: retries exhausted after %d attempts: %s",
+			stepID, retryCount+1, execErr.Error()).WithStep(stepID)
+	}
+	if !retryable {
+		return schema.NewErrorf(schema.ErrCodeNonRetryable, "step %s: non-retryable error: %s",
+			stepID, execErr.Error()).WithStep(stepID)
+	}
+
+	return schema.NewErrorf(schema.ErrCodeStepFailed, "step %s: %s", stepID, execErr.Error()).WithStep(stepID)
+}
+
+// failStep transitions a step to failed state and persists the error.
+func (e *executorImpl) failStep(ctx context.Context, run *workflowRun, workflowID, stepID string, execErr error) {
 	if err := e.stepFSM.Transition(ctx, workflowID, stepID, schema.StepStatusRunning, schema.StepStatusFailed); err != nil {
 		// If transition fails (e.g. already in retrying state), try from retrying.
 		_ = e.stepFSM.Transition(ctx, workflowID, stepID, schema.StepStatusRetrying, schema.StepStatusFailed)
@@ -949,39 +1048,47 @@ func (e *executorImpl) handleStepFailure(ctx context.Context, run *workflowRun, 
 	run.stepStates[stepID].Error = errPayload
 	run.mu.Unlock()
 	e.persistStepState(workflowID, stepID, run)
-
-	// Wrap with retry_exhausted if retries were attempted.
-	if stepDef.Retry != nil && retryCount >= stepDef.Retry.Max {
-		return schema.NewErrorf(schema.ErrCodeRetryExhausted, "step %s: retries exhausted after %d attempts: %s",
-			stepID, retryCount+1, execErr.Error()).WithStep(stepID)
-	}
-
-	return schema.NewErrorf(schema.ErrCodeStepFailed, "step %s: %s", stepID, execErr.Error()).WithStep(stepID)
 }
 
-// computeBackoff calculates the delay before the next retry attempt.
-func (e *executorImpl) computeBackoff(policy *schema.RetryPolicy, attempt int) time.Duration {
-	if policy.Delay == "" {
-		return 0
-	}
-	base, err := time.ParseDuration(policy.Delay)
-	if err != nil {
-		return 0
+// ignoreStepError marks a step as completed despite the error (used by "ignore" on_error strategy).
+func (e *executorImpl) ignoreStepError(ctx context.Context, run *workflowRun, workflowID, stepID string) {
+	if err := e.stepFSM.Transition(ctx, workflowID, stepID, schema.StepStatusRunning, schema.StepStatusCompleted); err != nil {
+		// Fallback: try from retrying.
+		_ = e.stepFSM.Transition(ctx, workflowID, stepID, schema.StepStatusRetrying, schema.StepStatusFailed)
+		return
 	}
 
-	switch policy.Backoff {
-	case "exponential":
-		// 2^attempt * base
-		multiplier := time.Duration(1)
-		for i := 0; i < attempt; i++ {
-			multiplier *= 2
-		}
-		return base * multiplier
-	case "linear":
-		return base * time.Duration(attempt+1)
-	default: // "none" or empty
-		return base
+	completedAt := time.Now().UTC()
+	run.mu.Lock()
+	run.stepStates[stepID].Status = schema.StepStatusCompleted
+	run.stepStates[stepID].CompletedAt = &completedAt
+	run.mu.Unlock()
+	e.persistStepState(workflowID, stepID, run)
+}
+
+// executeFallbackStep runs a fallback step when on_error specifies fallback_step.
+// The fallback step must exist in the DAG definition.
+func (e *executorImpl) executeFallbackStep(ctx context.Context, run *workflowRun, workflowID, originalStepID, fallbackStepID string, params map[string]any) error {
+	fbDef, ok := run.dag.Steps[fallbackStepID]
+	if !ok {
+		return schema.NewErrorf(schema.ErrCodeNotFound,
+			"fallback step %q not found in DAG (referenced by step %s on_error)",
+			fallbackStepID, originalStepID).WithStep(originalStepID)
 	}
+
+	// Initialize fallback step state if not present.
+	run.mu.Lock()
+	if _, exists := run.stepStates[fallbackStepID]; !exists {
+		run.stepStates[fallbackStepID] = &store.StepState{
+			WorkflowID: workflowID,
+			StepID:     fallbackStepID,
+			Status:     schema.StepStatusPending,
+		}
+	}
+	run.mu.Unlock()
+
+	// Execute the fallback step directly.
+	return e.executeStep(ctx, run, workflowID, fallbackStepID, fbDef, params)
 }
 
 // handleTimeout processes a workflow-level timeout according to the configured behavior.
@@ -1058,6 +1165,51 @@ func (e *executorImpl) persistWorkflowEnd(workflowID string, result *ExecutionRe
 		update.Error = errJSON
 	}
 	_ = e.store.UpdateWorkflow(context.Background(), workflowID, update)
+}
+
+// buildInterpolationScope creates an InterpolationScope from the current run state.
+// Step outputs are collected from completed steps, inputs from workflow params.
+func (e *executorImpl) buildInterpolationScope(run *workflowRun, workflowID string, params map[string]any) *expressions.InterpolationScope {
+	// Collect completed step outputs.
+	stepOutputs := make(map[string]any)
+	run.mu.Lock()
+	for stepID, ss := range run.stepStates {
+		if ss.Status == schema.StepStatusCompleted && len(ss.Output) > 0 {
+			var out any
+			if err := json.Unmarshal(ss.Output, &out); err == nil {
+				stepOutputs[stepID] = out
+			}
+		}
+	}
+	run.mu.Unlock()
+
+	// Build workflow metadata.
+	wfMeta := map[string]any{
+		"run_id": workflowID,
+	}
+
+	// Build context from store (best-effort).
+	ctxData := make(map[string]any)
+	wfCtx, err := e.store.GetWorkflowContext(context.Background(), workflowID)
+	if err == nil && wfCtx != nil {
+		ctxData["intent"] = wfCtx.OriginalIntent
+		ctxData["agent_id"] = wfCtx.AgentID
+		if len(wfCtx.AccumulatedData) > 0 {
+			var accum map[string]any
+			if err := json.Unmarshal(wfCtx.AccumulatedData, &accum); err == nil {
+				for k, v := range accum {
+					ctxData[k] = v
+				}
+			}
+		}
+	}
+
+	return &expressions.InterpolationScope{
+		Steps:    stepOutputs,
+		Inputs:   params,
+		Workflow: wfMeta,
+		Context:  ctxData,
+	}
 }
 
 func (e *executorImpl) finalizeResult(ctx context.Context, run *workflowRun, result *ExecutionResult) {

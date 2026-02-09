@@ -23,6 +23,14 @@ const (
 	EventSignalReceived = "signal_received"
 	EventVariableSet    = "variable_set"
 	EventDAGMutated     = "dag_mutated"
+
+	EventStepRetryAttempt    = "step_retry_attempt"
+	EventErrorHandlerInvoked = "error_handler_invoked"
+	EventCircuitBreakerOpen  = "circuit_breaker_open"
+	EventCircuitBreakerHalfOpen = "circuit_breaker_half_open"
+	EventCircuitBreakerClosed   = "circuit_breaker_closed"
+	EventStepFallback        = "step_fallback"
+	EventStepIgnored         = "step_ignored"
 )
 
 // WorkflowStatus represents the lifecycle state of a workflow.
