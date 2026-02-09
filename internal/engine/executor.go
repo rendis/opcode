@@ -1,0 +1,1081 @@
+package engine
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"sync"
+	"time"
+
+	"github.com/rendis/opcode/internal/actions"
+	"github.com/rendis/opcode/internal/store"
+	"github.com/rendis/opcode/pkg/schema"
+)
+
+// Executor is the central workflow execution coordinator.
+type Executor interface {
+	// Run starts a new workflow from a persisted Workflow record.
+	Run(ctx context.Context, wf *store.Workflow, params map[string]any) (*ExecutionResult, error)
+
+	// Resume continues a suspended or interrupted workflow from its last checkpoint.
+	// Replays events to rebuild state, then continues from first pending step.
+	// Reasoning nodes are NEVER replayed — stored decisions are injected.
+	Resume(ctx context.Context, workflowID string) (*ExecutionResult, error)
+
+	// Signal delivers an agent message to a suspended workflow.
+	Signal(ctx context.Context, workflowID string, signal schema.Signal) error
+
+	// Extend mutates the DAG of a running workflow in-flight.
+	Extend(ctx context.Context, workflowID string, mutation schema.DAGMutation) error
+
+	// Cancel terminates a workflow with a reason, cascading to active steps.
+	Cancel(ctx context.Context, workflowID string, reason string) error
+
+	// Status returns the current state of a workflow.
+	Status(ctx context.Context, workflowID string) (*WorkflowStatus, error)
+}
+
+// ExecutionResult is returned by Run and Resume with the workflow outcome.
+type ExecutionResult struct {
+	WorkflowID  string                 `json:"workflow_id"`
+	Status      schema.WorkflowStatus  `json:"status"`
+	Output      json.RawMessage        `json:"output,omitempty"`
+	Error       *schema.OpcodeError    `json:"error,omitempty"`
+	StartedAt   time.Time              `json:"started_at"`
+	CompletedAt *time.Time             `json:"completed_at,omitempty"`
+	Steps       map[string]*StepResult `json:"steps,omitempty"`
+}
+
+// StepResult summarizes the outcome of a single step.
+type StepResult struct {
+	StepID     string            `json:"step_id"`
+	Status     schema.StepStatus `json:"status"`
+	Output     json.RawMessage   `json:"output,omitempty"`
+	Error      *schema.OpcodeError `json:"error,omitempty"`
+	DurationMs int64             `json:"duration_ms,omitempty"`
+}
+
+// WorkflowStatus is a snapshot of a workflow's current state for querying.
+type WorkflowStatus struct {
+	WorkflowID       string                      `json:"workflow_id"`
+	Status           schema.WorkflowStatus       `json:"status"`
+	Steps            map[string]*store.StepState  `json:"steps,omitempty"`
+	PendingDecisions []*store.PendingDecision     `json:"pending_decisions,omitempty"`
+	Context          *store.WorkflowContext       `json:"context,omitempty"`
+	Events           []*store.Event               `json:"events,omitempty"`
+}
+
+// EventLogger abstracts the event log operations needed by the executor.
+// Satisfied by *store.EventLog and test mocks.
+type EventLogger interface {
+	EventAppender
+	GetEvents(ctx context.Context, workflowID string, since int64) ([]*store.Event, error)
+	GetEventsByType(ctx context.Context, eventType string, filter store.EventFilter) ([]*store.Event, error)
+	ReplayEvents(ctx context.Context, workflowID string) (map[string]*store.StepState, error)
+}
+
+// DefaultPoolSize is the default worker pool concurrency.
+const DefaultPoolSize = 10
+
+// DefaultOnTimeout is the default behavior when a workflow-level timeout fires.
+const DefaultOnTimeout = "fail"
+
+// ExecutorConfig holds configuration for the executor.
+type ExecutorConfig struct {
+	PoolSize int // max concurrent step goroutines
+}
+
+// executorImpl is the concrete Executor implementation.
+type executorImpl struct {
+	store    store.Store
+	eventLog EventLogger
+	wfFSM    *WorkflowFSM
+	stepFSM  *StepFSM
+	actions  actions.ActionRegistry
+	pool     *WorkerPool
+	config   ExecutorConfig
+
+	// mu guards running map.
+	mu      sync.Mutex
+	running map[string]*workflowRun
+}
+
+// workflowRun tracks a single in-flight workflow execution.
+type workflowRun struct {
+	workflowID string
+	dag        *DAG
+	stepStates map[string]*store.StepState
+	cancel     context.CancelFunc
+	signals    chan schema.Signal
+	mu         sync.Mutex // guards stepStates
+}
+
+// NewExecutor creates a new Executor with the given dependencies.
+func NewExecutor(s store.Store, el EventLogger, registry actions.ActionRegistry, cfg ExecutorConfig) Executor {
+	if cfg.PoolSize <= 0 {
+		cfg.PoolSize = DefaultPoolSize
+	}
+
+	wfFSM := NewWorkflowFSM(el)
+	stepFSM := NewStepFSM(el)
+	pool := NewWorkerPool(cfg.PoolSize)
+
+	return &executorImpl{
+		store:    s,
+		eventLog: el,
+		wfFSM:    wfFSM,
+		stepFSM:  stepFSM,
+		actions:  registry,
+		pool:     pool,
+		config:   cfg,
+		running:  make(map[string]*workflowRun),
+	}
+}
+
+// Run starts a new workflow execution.
+func (e *executorImpl) Run(ctx context.Context, wf *store.Workflow, params map[string]any) (*ExecutionResult, error) {
+	if wf == nil {
+		return nil, schema.NewError(schema.ErrCodeValidation, "workflow is nil")
+	}
+
+	// Parse the DAG from the workflow definition.
+	dag, err := ParseDAG(&wf.Definition)
+	if err != nil {
+		return nil, err
+	}
+
+	// Transition workflow: pending → active.
+	if err := e.wfFSM.Transition(ctx, wf.ID, wf.Status, schema.WorkflowStatusActive); err != nil {
+		return nil, err
+	}
+
+	// Persist the status change and start time.
+	now := time.Now().UTC()
+	activeStatus := schema.WorkflowStatusActive
+	if err := e.store.UpdateWorkflow(ctx, wf.ID, store.WorkflowUpdate{
+		Status:    &activeStatus,
+		StartedAt: &now,
+	}); err != nil {
+		return nil, schema.NewErrorf(schema.ErrCodeStore, "update workflow status: %s", err.Error()).WithCause(err)
+	}
+
+	// Initialize step states as pending.
+	stepStates := make(map[string]*store.StepState, len(dag.Steps))
+	for id := range dag.Steps {
+		ss := &store.StepState{
+			WorkflowID: wf.ID,
+			StepID:     id,
+			Status:     schema.StepStatusPending,
+		}
+		stepStates[id] = ss
+		if err := e.store.UpsertStepState(ctx, ss); err != nil {
+			return nil, schema.NewErrorf(schema.ErrCodeStore, "init step state %s: %s", id, err.Error()).WithCause(err)
+		}
+	}
+
+	// Apply workflow-level timeout if specified.
+	execCtx, execCancel := context.WithCancel(ctx)
+	var timeoutBehavior string
+	if wf.Definition.Timeout != "" {
+		dur, parseErr := time.ParseDuration(wf.Definition.Timeout)
+		if parseErr != nil {
+			execCancel()
+			return nil, schema.NewErrorf(schema.ErrCodeValidation, "invalid workflow timeout %q: %s", wf.Definition.Timeout, parseErr.Error())
+		}
+		timeoutBehavior = wf.Definition.OnTimeout
+		if timeoutBehavior == "" {
+			timeoutBehavior = DefaultOnTimeout
+		}
+		execCtx, execCancel = context.WithTimeout(ctx, dur)
+	}
+
+	// Register the run.
+	run := &workflowRun{
+		workflowID: wf.ID,
+		dag:        dag,
+		stepStates: stepStates,
+		cancel:     execCancel,
+		signals:    make(chan schema.Signal, 16),
+	}
+	e.mu.Lock()
+	e.running[wf.ID] = run
+	e.mu.Unlock()
+
+	// Execute the DAG.
+	result := e.executeDAG(execCtx, run, wf.ID, params, timeoutBehavior)
+
+	// Cleanup.
+	execCancel()
+	e.mu.Lock()
+	delete(e.running, wf.ID)
+	e.mu.Unlock()
+
+	return result, nil
+}
+
+// Resume continues a suspended or interrupted workflow.
+func (e *executorImpl) Resume(ctx context.Context, workflowID string) (*ExecutionResult, error) {
+	// Load workflow from store.
+	wf, err := e.store.GetWorkflow(ctx, workflowID)
+	if err != nil {
+		return nil, schema.NewErrorf(schema.ErrCodeStore, "load workflow: %s", err.Error()).WithCause(err)
+	}
+	if wf == nil {
+		return nil, schema.NewError(schema.ErrCodeNotFound, "workflow not found: "+workflowID)
+	}
+
+	// Only suspended or active workflows can be resumed.
+	if wf.Status != schema.WorkflowStatusSuspended && wf.Status != schema.WorkflowStatusActive {
+		return nil, schema.NewErrorf(schema.ErrCodeConflict,
+			"cannot resume workflow in status %s", wf.Status)
+	}
+
+	// Parse the DAG.
+	dag, err := ParseDAG(&wf.Definition)
+	if err != nil {
+		return nil, err
+	}
+
+	// Replay events to rebuild step states.
+	stepStates, err := e.eventLog.ReplayEvents(ctx, workflowID)
+	if err != nil {
+		return nil, schema.NewErrorf(schema.ErrCodeStore, "replay events: %s", err.Error()).WithCause(err)
+	}
+
+	// Ensure all DAG steps have a state entry.
+	for id := range dag.Steps {
+		if _, ok := stepStates[id]; !ok {
+			stepStates[id] = &store.StepState{
+				WorkflowID: workflowID,
+				StepID:     id,
+				Status:     schema.StepStatusPending,
+			}
+		}
+	}
+
+	// If suspended, transition back to active.
+	if wf.Status == schema.WorkflowStatusSuspended {
+		if err := e.wfFSM.Transition(ctx, workflowID, wf.Status, schema.WorkflowStatusActive); err != nil {
+			return nil, err
+		}
+		activeStatus := schema.WorkflowStatusActive
+		if err := e.store.UpdateWorkflow(ctx, workflowID, store.WorkflowUpdate{Status: &activeStatus}); err != nil {
+			return nil, schema.NewErrorf(schema.ErrCodeStore, "update workflow status: %s", err.Error()).WithCause(err)
+		}
+		// Emit resume event.
+		if err := e.eventLog.AppendEvent(ctx, &store.Event{
+			WorkflowID: workflowID,
+			Type:       schema.EventWorkflowResumed,
+		}); err != nil {
+			return nil, schema.NewErrorf(schema.ErrCodeStore, "emit resume event: %s", err.Error()).WithCause(err)
+		}
+	}
+
+	// Apply remaining workflow timeout if any.
+	execCtx, execCancel := context.WithCancel(ctx)
+	var timeoutBehavior string
+	if wf.Definition.Timeout != "" {
+		dur, parseErr := time.ParseDuration(wf.Definition.Timeout)
+		if parseErr == nil {
+			// Subtract elapsed time since workflow started.
+			elapsed := time.Duration(0)
+			if wf.StartedAt != nil {
+				elapsed = time.Since(*wf.StartedAt)
+			}
+			remaining := dur - elapsed
+			if remaining <= 0 {
+				execCancel()
+				return nil, schema.NewError(schema.ErrCodeTimeout, "workflow timeout already expired")
+			}
+			timeoutBehavior = wf.Definition.OnTimeout
+			if timeoutBehavior == "" {
+				timeoutBehavior = DefaultOnTimeout
+			}
+			execCtx, execCancel = context.WithTimeout(ctx, remaining)
+		}
+	}
+
+	run := &workflowRun{
+		workflowID: workflowID,
+		dag:        dag,
+		stepStates: stepStates,
+		cancel:     execCancel,
+		signals:    make(chan schema.Signal, 16),
+	}
+	e.mu.Lock()
+	e.running[workflowID] = run
+	e.mu.Unlock()
+
+	result := e.executeDAG(execCtx, run, workflowID, wf.InputParams, timeoutBehavior)
+
+	execCancel()
+	e.mu.Lock()
+	delete(e.running, workflowID)
+	e.mu.Unlock()
+
+	return result, nil
+}
+
+// Signal delivers a signal to a running/suspended workflow.
+func (e *executorImpl) Signal(ctx context.Context, workflowID string, signal schema.Signal) error {
+	// Emit signal event.
+	payload, _ := json.Marshal(signal)
+	if err := e.eventLog.AppendEvent(ctx, &store.Event{
+		WorkflowID: workflowID,
+		StepID:     signal.StepID,
+		Type:       schema.EventSignalReceived,
+		Payload:    payload,
+	}); err != nil {
+		return schema.NewErrorf(schema.ErrCodeStore, "emit signal event: %s", err.Error()).WithCause(err)
+	}
+
+	// If the workflow is running, deliver the signal to the channel.
+	e.mu.Lock()
+	run, ok := e.running[workflowID]
+	e.mu.Unlock()
+
+	if ok {
+		select {
+		case run.signals <- signal:
+		default:
+			return schema.NewError(schema.ErrCodeSignalFailed, "signal channel full")
+		}
+		return nil
+	}
+
+	// If not running, handle decision resolution for suspended workflows.
+	if signal.Type == schema.SignalDecision && signal.StepID != "" {
+		decisions, err := e.store.ListPendingDecisions(ctx, store.DecisionFilter{
+			WorkflowID: workflowID,
+			Status:     "pending",
+		})
+		if err != nil {
+			return schema.NewErrorf(schema.ErrCodeStore, "list decisions: %s", err.Error()).WithCause(err)
+		}
+		for _, d := range decisions {
+			if d.StepID == signal.StepID {
+				choice, ok := signal.Payload["choice"].(string)
+				if !ok || choice == "" {
+					return schema.NewError(schema.ErrCodeValidation, "signal payload missing valid 'choice' field")
+				}
+				resolution := &store.Resolution{
+					Choice:    choice,
+					Reasoning: signal.Reasoning,
+				}
+				if err := e.store.ResolveDecision(ctx, d.ID, resolution); err != nil {
+					return schema.NewErrorf(schema.ErrCodeStore, "resolve decision: %s", err.Error()).WithCause(err)
+				}
+				// Emit decision resolved event.
+				resPayload, _ := json.Marshal(resolution)
+				if err := e.eventLog.AppendEvent(ctx, &store.Event{
+					WorkflowID: workflowID,
+					StepID:     signal.StepID,
+					Type:       schema.EventDecisionResolved,
+					Payload:    resPayload,
+				}); err != nil {
+					return schema.NewErrorf(schema.ErrCodeStore, "emit decision resolved: %s", err.Error()).WithCause(err)
+				}
+				return nil
+			}
+		}
+		return schema.NewErrorf(schema.ErrCodeNotFound, "no pending decision for step %s", signal.StepID)
+	}
+
+	return schema.NewError(schema.ErrCodeConflict, "workflow not running")
+}
+
+// Extend mutates the DAG of a running workflow.
+func (e *executorImpl) Extend(ctx context.Context, workflowID string, mutation schema.DAGMutation) error {
+	// Emit mutation event.
+	payload, _ := json.Marshal(mutation)
+	if err := e.eventLog.AppendEvent(ctx, &store.Event{
+		WorkflowID: workflowID,
+		Type:       schema.EventDAGMutated,
+		Payload:    payload,
+	}); err != nil {
+		return schema.NewErrorf(schema.ErrCodeStore, "emit dag mutation event: %s", err.Error()).WithCause(err)
+	}
+
+	// Variable set is the only mutation supported in Cycle 1.
+	if mutation.Action == schema.MutationSetVariable && mutation.Variable != nil {
+		varPayload, _ := json.Marshal(mutation.Variable)
+		return e.eventLog.AppendEvent(ctx, &store.Event{
+			WorkflowID: workflowID,
+			Type:       schema.EventVariableSet,
+			Payload:    varPayload,
+		})
+	}
+
+	// DAG structure mutations (insert, replace, remove) are deferred to Cycle 2.
+	return schema.NewError(schema.ErrCodeValidation, "DAG structure mutations not yet supported; use set_variable")
+}
+
+// Cancel terminates a workflow.
+func (e *executorImpl) Cancel(ctx context.Context, workflowID string, reason string) error {
+	wf, err := e.store.GetWorkflow(ctx, workflowID)
+	if err != nil {
+		return schema.NewErrorf(schema.ErrCodeStore, "load workflow: %s", err.Error()).WithCause(err)
+	}
+	if wf == nil {
+		return schema.NewError(schema.ErrCodeNotFound, "workflow not found: "+workflowID)
+	}
+
+	// Build current step states.
+	stepStates, err := e.store.ListStepStates(ctx, workflowID)
+	if err != nil {
+		return schema.NewErrorf(schema.ErrCodeStore, "list step states: %s", err.Error()).WithCause(err)
+	}
+	stateMap := make(map[string]schema.StepStatus, len(stepStates))
+	for _, ss := range stepStates {
+		stateMap[ss.StepID] = ss.Status
+	}
+
+	// Use the FSM cancel cascade.
+	if err := CancelWorkflow(ctx, e.wfFSM, e.stepFSM, workflowID, wf.Status, stateMap); err != nil {
+		return err
+	}
+
+	// Persist cancel status.
+	cancelledStatus := schema.WorkflowStatusCancelled
+	now := time.Now().UTC()
+	errPayload, _ := json.Marshal(map[string]string{"reason": reason})
+	if err := e.store.UpdateWorkflow(ctx, workflowID, store.WorkflowUpdate{
+		Status:      &cancelledStatus,
+		CompletedAt: &now,
+		Error:       errPayload,
+	}); err != nil {
+		return schema.NewErrorf(schema.ErrCodeStore, "update workflow status: %s", err.Error()).WithCause(err)
+	}
+
+	// Persist step state changes.
+	for _, ss := range stepStates {
+		if canSkip(ss.Status) {
+			ss.Status = schema.StepStatusSkipped
+			if err := e.store.UpsertStepState(ctx, ss); err != nil {
+				return schema.NewErrorf(schema.ErrCodeStore, "update step state %s: %s", ss.StepID, err.Error()).WithCause(err)
+			}
+		}
+	}
+
+	// If the workflow is actively running, cancel its context.
+	e.mu.Lock()
+	if run, ok := e.running[workflowID]; ok {
+		run.cancel()
+	}
+	e.mu.Unlock()
+
+	return nil
+}
+
+// Status returns the current workflow state snapshot.
+func (e *executorImpl) Status(ctx context.Context, workflowID string) (*WorkflowStatus, error) {
+	wf, err := e.store.GetWorkflow(ctx, workflowID)
+	if err != nil {
+		return nil, schema.NewErrorf(schema.ErrCodeStore, "load workflow: %s", err.Error()).WithCause(err)
+	}
+	if wf == nil {
+		return nil, schema.NewError(schema.ErrCodeNotFound, "workflow not found: "+workflowID)
+	}
+
+	stepStates, err := e.store.ListStepStates(ctx, workflowID)
+	if err != nil {
+		return nil, schema.NewErrorf(schema.ErrCodeStore, "list step states: %s", err.Error()).WithCause(err)
+	}
+	stepsMap := make(map[string]*store.StepState, len(stepStates))
+	for _, ss := range stepStates {
+		stepsMap[ss.StepID] = ss
+	}
+
+	decisions, err := e.store.ListPendingDecisions(ctx, store.DecisionFilter{
+		WorkflowID: workflowID,
+		Status:     "pending",
+	})
+	if err != nil {
+		return nil, schema.NewErrorf(schema.ErrCodeStore, "list decisions: %s", err.Error()).WithCause(err)
+	}
+
+	wfCtx, _ := e.store.GetWorkflowContext(ctx, workflowID)
+
+	events, err := e.eventLog.GetEvents(ctx, workflowID, 0)
+	if err != nil {
+		return nil, schema.NewErrorf(schema.ErrCodeStore, "get events: %s", err.Error()).WithCause(err)
+	}
+
+	return &WorkflowStatus{
+		WorkflowID:       workflowID,
+		Status:           wf.Status,
+		Steps:            stepsMap,
+		PendingDecisions: decisions,
+		Context:          wfCtx,
+		Events:           events,
+	}, nil
+}
+
+// --- DAG execution engine ---
+
+// executeDAG walks the DAG level by level, dispatching steps to the worker pool.
+func (e *executorImpl) executeDAG(ctx context.Context, run *workflowRun, workflowID string, params map[string]any, timeoutBehavior string) *ExecutionResult {
+	startedAt := time.Now().UTC()
+	result := &ExecutionResult{
+		WorkflowID: workflowID,
+		Status:     schema.WorkflowStatusActive,
+		StartedAt:  startedAt,
+		Steps:      make(map[string]*StepResult),
+	}
+
+	var finalErr *schema.OpcodeError
+
+	// Walk levels sequentially. Within each level, dispatch steps in parallel.
+	for _, level := range run.dag.Levels {
+		if ctx.Err() != nil {
+			break
+		}
+
+		var wg sync.WaitGroup
+		stepErrors := make(chan stepExecError, len(level))
+
+		for _, stepID := range level {
+			run.mu.Lock()
+			ss := run.stepStates[stepID]
+			run.mu.Unlock()
+
+			// Skip already completed/failed/skipped steps (from resume).
+			if isTerminalStep(ss.Status) {
+				result.Steps[stepID] = &StepResult{
+					StepID:     stepID,
+					Status:     ss.Status,
+					Output:     ss.Output,
+					DurationMs: ss.DurationMs,
+				}
+				continue
+			}
+
+			stepDef := run.dag.Steps[stepID]
+			wg.Add(1)
+			sid := stepID
+			sdef := stepDef
+
+			err := e.pool.Submit(ctx, func(stepCtx context.Context) error {
+				defer wg.Done()
+				execErr := e.executeStep(stepCtx, run, workflowID, sid, sdef, params)
+				if execErr != nil {
+					stepErrors <- stepExecError{stepID: sid, err: execErr}
+				}
+				return nil // pool doesn't track step errors
+			})
+			if err != nil {
+				wg.Done()
+				// Pool rejected (shutdown or context cancelled).
+				stepErrors <- stepExecError{stepID: sid, err: err}
+			}
+		}
+
+		wg.Wait()
+		close(stepErrors)
+
+		// Check for step failures.
+		for se := range stepErrors {
+			run.mu.Lock()
+			ss := run.stepStates[se.stepID]
+			run.mu.Unlock()
+
+			// If the step is suspended (reasoning node), that's not a failure.
+			if ss != nil && ss.Status == schema.StepStatusSuspended {
+				continue
+			}
+
+			if finalErr == nil {
+				if opErr, ok := se.err.(*schema.OpcodeError); ok {
+					finalErr = opErr
+				} else {
+					finalErr = schema.NewErrorf(schema.ErrCodeStepFailed, "step %s: %s", se.stepID, se.err.Error()).WithStep(se.stepID)
+				}
+			}
+		}
+
+		// If the context is done due to workflow timeout, handle that before
+		// treating individual step errors as the final error.
+		if ctx.Err() != nil {
+			finalErr = nil // Clear step-level errors; timeout takes precedence.
+			break
+		}
+
+		// If any step failed and there's no on_error handler, abort.
+		if finalErr != nil {
+			break
+		}
+
+		// Check if any step is suspended (reasoning node waiting for decision).
+		hasSuspended := false
+		for _, stepID := range level {
+			run.mu.Lock()
+			ss := run.stepStates[stepID]
+			run.mu.Unlock()
+			if ss != nil && ss.Status == schema.StepStatusSuspended {
+				hasSuspended = true
+				break
+			}
+		}
+		if hasSuspended {
+			// Workflow suspends waiting for agent input.
+			result.Status = schema.WorkflowStatusSuspended
+			e.finalizeResult(ctx, run, result)
+			e.transitionWorkflow(ctx, workflowID, schema.WorkflowStatusActive, schema.WorkflowStatusSuspended)
+			return result
+		}
+	}
+
+	// Handle context errors (timeout or cancellation).
+	if ctx.Err() != nil && finalErr == nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			finalErr = e.handleTimeout(ctx, run, workflowID, timeoutBehavior)
+			if timeoutBehavior == "suspend" {
+				result.Status = schema.WorkflowStatusSuspended
+				e.finalizeResult(ctx, run, result)
+				return result
+			}
+			if timeoutBehavior == "cancel" {
+				result.Status = schema.WorkflowStatusCancelled
+				e.finalizeResult(ctx, run, result)
+				return result
+			}
+			// default "fail" falls through
+		} else {
+			finalErr = schema.NewError(schema.ErrCodeCancelled, "workflow cancelled")
+		}
+	}
+
+	// Determine final workflow status.
+	if finalErr != nil {
+		result.Status = schema.WorkflowStatusFailed
+		result.Error = finalErr
+		e.transitionWorkflow(ctx, workflowID, schema.WorkflowStatusActive, schema.WorkflowStatusFailed)
+	} else {
+		result.Status = schema.WorkflowStatusCompleted
+		e.transitionWorkflow(ctx, workflowID, schema.WorkflowStatusActive, schema.WorkflowStatusCompleted)
+	}
+
+	now := time.Now().UTC()
+	result.CompletedAt = &now
+	e.finalizeResult(ctx, run, result)
+	e.persistWorkflowEnd(workflowID, result)
+
+	return result
+}
+
+type stepExecError struct {
+	stepID string
+	err    error
+}
+
+// executeStep runs a single step: transition states, execute action, handle result.
+func (e *executorImpl) executeStep(ctx context.Context, run *workflowRun, workflowID, stepID string, stepDef *schema.StepDefinition, params map[string]any) error {
+	// Apply step-level timeout if specified.
+	stepCtx := ctx
+	var stepCancel context.CancelFunc
+	if stepDef.Timeout != "" {
+		dur, err := time.ParseDuration(stepDef.Timeout)
+		if err == nil && dur > 0 {
+			stepCtx, stepCancel = context.WithTimeout(ctx, dur)
+			defer stepCancel()
+		}
+	}
+
+	// Transition: pending → scheduled.
+	run.mu.Lock()
+	ss := run.stepStates[stepID]
+	currentStatus := ss.Status
+	run.mu.Unlock()
+
+	if currentStatus == schema.StepStatusPending {
+		if err := e.stepFSM.Transition(stepCtx, workflowID, stepID, schema.StepStatusPending, schema.StepStatusScheduled); err != nil {
+			return err
+		}
+		e.updateStepStatus(run, stepID, schema.StepStatusScheduled)
+	}
+
+	// Transition: scheduled → running.
+	if err := e.stepFSM.Transition(stepCtx, workflowID, stepID, schema.StepStatusScheduled, schema.StepStatusRunning); err != nil {
+		return err
+	}
+	e.updateStepStatus(run, stepID, schema.StepStatusRunning)
+	startTime := time.Now().UTC()
+
+	// Persist running state.
+	run.mu.Lock()
+	run.stepStates[stepID].StartedAt = &startTime
+	run.mu.Unlock()
+	e.persistStepState(workflowID, stepID, run)
+
+	// Handle step by type.
+	var output json.RawMessage
+	var execErr error
+
+	switch stepDef.Type {
+	case schema.StepTypeReasoning:
+		execErr = e.executeReasoningStep(stepCtx, run, workflowID, stepID, stepDef)
+		if execErr == nil {
+			// Check if suspended.
+			run.mu.Lock()
+			status := run.stepStates[stepID].Status
+			run.mu.Unlock()
+			if status == schema.StepStatusSuspended {
+				return nil
+			}
+		}
+
+	case schema.StepTypeAction, "":
+		output, execErr = e.executeActionStep(stepCtx, stepDef, params)
+
+	default:
+		// Condition, parallel, loop — Cycle 2.
+		output, execErr = e.executeActionStep(stepCtx, stepDef, params)
+	}
+
+	// Handle step timeout.
+	if stepCtx.Err() == context.DeadlineExceeded && execErr == nil {
+		execErr = schema.NewErrorf(schema.ErrCodeTimeout, "step %s timed out", stepID).WithStep(stepID)
+	}
+
+	if execErr != nil {
+		return e.handleStepFailure(stepCtx, run, workflowID, stepID, stepDef, execErr, params)
+	}
+
+	// Transition: running → completed.
+	if err := e.stepFSM.Transition(stepCtx, workflowID, stepID, schema.StepStatusRunning, schema.StepStatusCompleted); err != nil {
+		return err
+	}
+
+	completedAt := time.Now().UTC()
+	durationMs := completedAt.Sub(startTime).Milliseconds()
+
+	run.mu.Lock()
+	run.stepStates[stepID].Status = schema.StepStatusCompleted
+	run.stepStates[stepID].Output = output
+	run.stepStates[stepID].CompletedAt = &completedAt
+	run.stepStates[stepID].DurationMs = durationMs
+	run.mu.Unlock()
+
+	e.persistStepState(workflowID, stepID, run)
+	return nil
+}
+
+// executeActionStep runs an action-type step via the action registry.
+func (e *executorImpl) executeActionStep(ctx context.Context, stepDef *schema.StepDefinition, params map[string]any) (json.RawMessage, error) {
+	action, err := e.actions.Get(stepDef.Action)
+	if err != nil {
+		return nil, schema.NewErrorf(schema.ErrCodeExecution, "action %q not found: %s", stepDef.Action, err.Error())
+	}
+
+	// Build action input from step params + workflow params.
+	stepParams := make(map[string]any)
+	if len(stepDef.Params) > 0 {
+		if err := json.Unmarshal(stepDef.Params, &stepParams); err != nil {
+			return nil, schema.NewErrorf(schema.ErrCodeValidation, "unmarshal step params: %s", err.Error())
+		}
+	}
+
+	input := actions.ActionInput{
+		Params:  stepParams,
+		Context: params,
+	}
+
+	out, err := action.Execute(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+	if out != nil {
+		return out.Data, nil
+	}
+	return nil, nil
+}
+
+// executeReasoningStep handles reasoning-type steps: creates a pending decision and suspends.
+func (e *executorImpl) executeReasoningStep(ctx context.Context, run *workflowRun, workflowID, stepID string, stepDef *schema.StepDefinition) error {
+	var cfg schema.ReasoningConfig
+	if err := json.Unmarshal(stepDef.Config, &cfg); err != nil {
+		return schema.NewErrorf(schema.ErrCodeValidation, "invalid reasoning config: %s", err.Error()).WithStep(stepID)
+	}
+
+	// Check if there's already a resolved decision (from replay/signal).
+	decisions, err := e.store.ListPendingDecisions(ctx, store.DecisionFilter{
+		WorkflowID: workflowID,
+		Status:     "resolved",
+	})
+	if err == nil {
+		for _, d := range decisions {
+			if d.StepID == stepID && d.Resolution != nil {
+				// Decision already resolved — don't re-request. Reasoning nodes NEVER replay.
+				return nil
+			}
+		}
+	}
+
+	// Create pending decision.
+	optionsJSON, _ := json.Marshal(cfg.Options)
+	contextJSON, _ := json.Marshal(map[string]string{
+		"prompt_context": cfg.PromptContext,
+	})
+
+	decision := &store.PendingDecision{
+		ID:         fmt.Sprintf("%s_%s", workflowID, stepID),
+		WorkflowID: workflowID,
+		StepID:     stepID,
+		Context:    contextJSON,
+		Options:    optionsJSON,
+		Fallback:   cfg.Fallback,
+		Status:     "pending",
+		CreatedAt:  time.Now().UTC(),
+	}
+	if cfg.TargetAgent != "" {
+		decision.TargetAgentID = cfg.TargetAgent
+	}
+	if cfg.Timeout != "" {
+		dur, err := time.ParseDuration(cfg.Timeout)
+		if err == nil {
+			t := time.Now().UTC().Add(dur)
+			decision.TimeoutAt = &t
+		}
+	}
+
+	if err := e.store.CreateDecision(ctx, decision); err != nil {
+		return schema.NewErrorf(schema.ErrCodeStore, "create decision: %s", err.Error()).WithStep(stepID).WithCause(err)
+	}
+
+	// Emit decision requested event.
+	if err := e.eventLog.AppendEvent(ctx, &store.Event{
+		WorkflowID: workflowID,
+		StepID:     stepID,
+		Type:       schema.EventDecisionRequested,
+		Payload:    contextJSON,
+	}); err != nil {
+		return schema.NewErrorf(schema.ErrCodeStore, "emit decision event: %s", err.Error()).WithStep(stepID).WithCause(err)
+	}
+
+	// Transition: running → suspended.
+	if err := e.stepFSM.Transition(ctx, workflowID, stepID, schema.StepStatusRunning, schema.StepStatusSuspended); err != nil {
+		return err
+	}
+	e.updateStepStatus(run, stepID, schema.StepStatusSuspended)
+	e.persistStepState(workflowID, stepID, run)
+
+	return nil
+}
+
+// handleStepFailure handles a step that errored, including retry logic and on_error jumps.
+func (e *executorImpl) handleStepFailure(ctx context.Context, run *workflowRun, workflowID, stepID string, stepDef *schema.StepDefinition, execErr error, params map[string]any) error {
+	run.mu.Lock()
+	ss := run.stepStates[stepID]
+	retryCount := ss.RetryCount
+	run.mu.Unlock()
+
+	// Check retry policy.
+	if stepDef.Retry != nil && retryCount < stepDef.Retry.Max {
+		// Transition: running → retrying.
+		if err := e.stepFSM.Transition(ctx, workflowID, stepID, schema.StepStatusRunning, schema.StepStatusRetrying); err != nil {
+			return err
+		}
+
+		run.mu.Lock()
+		run.stepStates[stepID].Status = schema.StepStatusRetrying
+		run.stepStates[stepID].RetryCount++
+		run.mu.Unlock()
+		e.persistStepState(workflowID, stepID, run)
+
+		// Apply backoff delay.
+		delay := e.computeBackoff(stepDef.Retry, retryCount)
+		if delay > 0 {
+			select {
+			case <-time.After(delay):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+
+		// Transition: retrying → running.
+		if err := e.stepFSM.Transition(ctx, workflowID, stepID, schema.StepStatusRetrying, schema.StepStatusRunning); err != nil {
+			return err
+		}
+		e.updateStepStatus(run, stepID, schema.StepStatusRunning)
+
+		// Re-execute with fresh step timeout.
+		retryCtx := ctx
+		if stepDef.Timeout != "" {
+			dur, err := time.ParseDuration(stepDef.Timeout)
+			if err == nil && dur > 0 {
+				var retryCancel context.CancelFunc
+				retryCtx, retryCancel = context.WithTimeout(ctx, dur)
+				defer retryCancel()
+			}
+		}
+
+		var output json.RawMessage
+		var retryErr error
+		switch stepDef.Type {
+		case schema.StepTypeAction, "":
+			output, retryErr = e.executeActionStep(retryCtx, stepDef, params)
+		default:
+			output, retryErr = e.executeActionStep(retryCtx, stepDef, params)
+		}
+
+		if retryErr != nil {
+			// Recurse for further retries.
+			return e.handleStepFailure(ctx, run, workflowID, stepID, stepDef, retryErr, params)
+		}
+
+		// Success after retry.
+		if err := e.stepFSM.Transition(ctx, workflowID, stepID, schema.StepStatusRunning, schema.StepStatusCompleted); err != nil {
+			return err
+		}
+		completedAt := time.Now().UTC()
+		run.mu.Lock()
+		run.stepStates[stepID].Status = schema.StepStatusCompleted
+		run.stepStates[stepID].Output = output
+		run.stepStates[stepID].CompletedAt = &completedAt
+		run.mu.Unlock()
+		e.persistStepState(workflowID, stepID, run)
+		return nil
+	}
+
+	// Retries exhausted or no retry policy — fail the step.
+	if err := e.stepFSM.Transition(ctx, workflowID, stepID, schema.StepStatusRunning, schema.StepStatusFailed); err != nil {
+		// If transition fails (e.g. already in retrying state), try from retrying.
+		_ = e.stepFSM.Transition(ctx, workflowID, stepID, schema.StepStatusRetrying, schema.StepStatusFailed)
+	}
+
+	errPayload, _ := json.Marshal(map[string]string{"error": execErr.Error()})
+	run.mu.Lock()
+	run.stepStates[stepID].Status = schema.StepStatusFailed
+	run.stepStates[stepID].Error = errPayload
+	run.mu.Unlock()
+	e.persistStepState(workflowID, stepID, run)
+
+	// Wrap with retry_exhausted if retries were attempted.
+	if stepDef.Retry != nil && retryCount >= stepDef.Retry.Max {
+		return schema.NewErrorf(schema.ErrCodeRetryExhausted, "step %s: retries exhausted after %d attempts: %s",
+			stepID, retryCount+1, execErr.Error()).WithStep(stepID)
+	}
+
+	return schema.NewErrorf(schema.ErrCodeStepFailed, "step %s: %s", stepID, execErr.Error()).WithStep(stepID)
+}
+
+// computeBackoff calculates the delay before the next retry attempt.
+func (e *executorImpl) computeBackoff(policy *schema.RetryPolicy, attempt int) time.Duration {
+	if policy.Delay == "" {
+		return 0
+	}
+	base, err := time.ParseDuration(policy.Delay)
+	if err != nil {
+		return 0
+	}
+
+	switch policy.Backoff {
+	case "exponential":
+		// 2^attempt * base
+		multiplier := time.Duration(1)
+		for i := 0; i < attempt; i++ {
+			multiplier *= 2
+		}
+		return base * multiplier
+	case "linear":
+		return base * time.Duration(attempt+1)
+	default: // "none" or empty
+		return base
+	}
+}
+
+// handleTimeout processes a workflow-level timeout according to the configured behavior.
+func (e *executorImpl) handleTimeout(ctx context.Context, run *workflowRun, workflowID, behavior string) *schema.OpcodeError {
+	// Use a fresh context since the original is cancelled.
+	bgCtx := context.Background()
+
+	// Emit timeout event.
+	_ = e.eventLog.AppendEvent(bgCtx, &store.Event{
+		WorkflowID: workflowID,
+		Type:       schema.EventWorkflowTimedOut,
+	})
+
+	switch behavior {
+	case "suspend":
+		e.transitionWorkflow(bgCtx, workflowID, schema.WorkflowStatusActive, schema.WorkflowStatusSuspended)
+		return nil
+
+	case "cancel":
+		run.mu.Lock()
+		stateMap := make(map[string]schema.StepStatus, len(run.stepStates))
+		for id, ss := range run.stepStates {
+			stateMap[id] = ss.Status
+		}
+		run.mu.Unlock()
+		_ = CancelWorkflow(bgCtx, e.wfFSM, e.stepFSM, workflowID, schema.WorkflowStatusActive, stateMap)
+		return schema.NewError(schema.ErrCodeCancelled, "workflow cancelled due to timeout")
+
+	default: // "fail"
+		return schema.NewError(schema.ErrCodeTimeout, "workflow timed out")
+	}
+}
+
+// --- Helpers ---
+
+func (e *executorImpl) updateStepStatus(run *workflowRun, stepID string, status schema.StepStatus) {
+	run.mu.Lock()
+	if ss, ok := run.stepStates[stepID]; ok {
+		ss.Status = status
+	}
+	run.mu.Unlock()
+}
+
+func (e *executorImpl) persistStepState(workflowID, stepID string, run *workflowRun) {
+	run.mu.Lock()
+	ss := run.stepStates[stepID]
+	run.mu.Unlock()
+	if ss != nil {
+		// Best-effort persist — executor continues even if this fails.
+		_ = e.store.UpsertStepState(context.Background(), ss)
+	}
+}
+
+func (e *executorImpl) transitionWorkflow(ctx context.Context, workflowID string, from, to schema.WorkflowStatus) {
+	// Use background context if original is cancelled.
+	transCtx := ctx
+	if ctx.Err() != nil {
+		transCtx = context.Background()
+	}
+	_ = e.wfFSM.Transition(transCtx, workflowID, from, to)
+	_ = e.store.UpdateWorkflow(transCtx, workflowID, store.WorkflowUpdate{Status: &to})
+}
+
+func (e *executorImpl) persistWorkflowEnd(workflowID string, result *ExecutionResult) {
+	update := store.WorkflowUpdate{
+		Status:      &result.Status,
+		CompletedAt: result.CompletedAt,
+	}
+	if result.Output != nil {
+		update.Output = result.Output
+	}
+	if result.Error != nil {
+		errJSON, _ := json.Marshal(result.Error)
+		update.Error = errJSON
+	}
+	_ = e.store.UpdateWorkflow(context.Background(), workflowID, update)
+}
+
+func (e *executorImpl) finalizeResult(ctx context.Context, run *workflowRun, result *ExecutionResult) {
+	run.mu.Lock()
+	defer run.mu.Unlock()
+	for stepID, ss := range run.stepStates {
+		if _, ok := result.Steps[stepID]; ok {
+			continue
+		}
+		sr := &StepResult{
+			StepID:     stepID,
+			Status:     ss.Status,
+			Output:     ss.Output,
+			DurationMs: ss.DurationMs,
+		}
+		if ss.Error != nil {
+			sr.Error = schema.NewError(schema.ErrCodeStepFailed, string(ss.Error))
+		}
+		result.Steps[stepID] = sr
+	}
+}
