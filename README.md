@@ -6,7 +6,8 @@
     <img alt="OPCODE — Agent-first workflow orchestration engine" src="assets/banner-light.svg" width="100%">
   </picture>
 
-  [![Go](https://img.shields.io/badge/Go-1.25+-00ADD8?style=flat&logo=go&logoColor=white)](https://go.dev) [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE) [![Tests](https://img.shields.io/badge/Tests-929_passing-success)](https://github.com/rendis/opcode)
+[![Go](https://img.shields.io/badge/Go-1.25+-00ADD8?style=flat&logo=go&logoColor=white)](https://go.dev) [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE) [![Tests](https://img.shields.io/badge/Tests-929_passing-success)](https://github.com/rendis/opcode)
+
 </div>
 
 Agent-first workflow orchestration engine. OPCODE lets AI agents define, execute, and manage complex multi-step workflows through a Model Context Protocol (MCP) interface. Workflows are expressed as directed acyclic graphs (DAGs) with built-in support for reasoning nodes, flow control, event sourcing, process isolation, and secret management.
@@ -28,6 +29,7 @@ Agent-first workflow orchestration engine. OPCODE lets AI agents define, execute
 
 ## Table of Contents
 
+- [Agent Skill](#agent-skill)
 - [Tech Stack](#tech-stack)
 - [Prerequisites](#prerequisites)
 - [Getting Started](#getting-started)
@@ -42,6 +44,26 @@ Agent-first workflow orchestration engine. OPCODE lets AI agents define, execute
 - [Testing](#testing)
 - [Deployment](#deployment)
 - [Troubleshooting](#troubleshooting)
+
+## Agent Skill
+
+OPCODE includes an agent skill that teaches AI coding agents (Claude Code, Cursor, etc.) how to define, execute, and manage workflows using the MCP tools. The skill provides reference documentation for workflow schemas, actions, expressions, error handling, and common patterns.
+
+### Install via [skills.sh](https://skills.sh)
+
+```bash
+npx skills add https://github.com/rendis/opcode --skill opcode
+```
+
+### Install via [OpenClaw](https://clawhub.ai)
+
+```bash
+npx clawhub@latest install opcode
+# or
+pnpm dlx clawhub@latest install opcode
+# or
+bunx clawhub@latest install opcode
+```
 
 ## Tech Stack
 
@@ -146,16 +168,16 @@ All 903 tests should pass. The tests use embedded libSQL with temporary database
 
 44 ready-to-use workflow definitions in [`examples/`](examples/):
 
-| Category | Highlights |
-|----------|-----------|
-| **Agent Ops** | content-summarizer, multi-source-research, iterative-refinement |
-| **DevOps / CI-CD** | deploy-gate, log-anomaly-triage, health-check-sweep |
-| **Data Pipelines** | etl-with-validation, batch-file-processor, sync-drift-detection |
-| **Human-in-the-Loop** | approval-chain, free-form-decision, escalation-ladder |
-| **Integrations** | webhook-handler, lead-enrichment, two-way-sync |
-| **Monitoring** | error-aggregator, uptime-monitor, backup-verification |
-| **Security** | secret-rotation, dependency-audit |
-| **E-Commerce** | order-processing, invoice-generator, price-monitor |
+| Category              | Highlights                                                      |
+| --------------------- | --------------------------------------------------------------- |
+| **Agent Ops**         | content-summarizer, multi-source-research, iterative-refinement |
+| **DevOps / CI-CD**    | deploy-gate, log-anomaly-triage, health-check-sweep             |
+| **Data Pipelines**    | etl-with-validation, batch-file-processor, sync-drift-detection |
+| **Human-in-the-Loop** | approval-chain, free-form-decision, escalation-ladder           |
+| **Integrations**      | webhook-handler, lead-enrichment, two-way-sync                  |
+| **Monitoring**        | error-aggregator, uptime-monitor, backup-verification           |
+| **Security**          | secret-rotation, dependency-audit                               |
+| **E-Commerce**        | order-processing, invoice-generator, price-monitor              |
 
 Each example includes a `workflow.json` and a `README.md` with step-by-step explanation. See the full [examples catalog](examples/README.md) for feature index and script conventions.
 
