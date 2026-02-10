@@ -34,6 +34,8 @@ const (
 // ValidatePath checks whether the given path is permitted under these limits.
 // Empty path lists mean unrestricted access (permissive default for dev/fallback).
 // DenyPaths always takes precedence over allow lists.
+// Note: this is a best-effort check subject to TOCTOU races; kernel-level
+// isolation (namespaces/chroot in LinuxIsolator) provides the hard guarantee.
 func (r ResourceLimits) ValidatePath(path string, mode PathAccessMode) error {
 	clean, err := resolveCleanPath(path)
 	if err != nil {

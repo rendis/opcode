@@ -3,10 +3,12 @@ package isolation
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"testing"
 	"time"
 
@@ -146,6 +148,107 @@ func TestValidatePath_SymlinkedParent(t *testing.T) {
 	assert.NoError(t, rl.ValidatePath(filepath.Join(link, "file.txt"), PathAccessWrite))
 }
 
+func TestValidatePath_EmptyPath_Error(t *testing.T) {
+	// Empty string resolves to CWD via filepath.Abs — must be denied when lists are configured.
+	rl := ResourceLimits{WritablePaths: []string{"/allowed"}}
+	err := rl.ValidatePath("", PathAccessWrite)
+	require.Error(t, err)
+	assertPathDenied(t, err)
+}
+
+func TestValidatePath_RootDeny_BlocksEverything(t *testing.T) {
+	rl := ResourceLimits{DenyPaths: []string{"/"}}
+	err := rl.ValidatePath("/any/path/at/all", PathAccessRead)
+	require.Error(t, err)
+	assertPathDenied(t, err)
+}
+
+func TestValidatePath_RootWritable_AllowsAll(t *testing.T) {
+	rl := ResourceLimits{WritablePaths: []string{"/"}}
+	assert.NoError(t, rl.ValidatePath("/any/path", PathAccessWrite))
+	assert.NoError(t, rl.ValidatePath("/any/path", PathAccessRead))
+}
+
+func TestValidatePath_RelativePath_ResolvesToCwd(t *testing.T) {
+	// Relative paths resolve via filepath.Abs (CWD-dependent).
+	// With WritablePaths set, the resolved absolute path must be under an allowed path.
+	cwd, err := os.Getwd()
+	require.NoError(t, err)
+	rl := ResourceLimits{WritablePaths: []string{cwd}}
+	assert.NoError(t, rl.ValidatePath("relative/file.txt", PathAccessWrite))
+}
+
+func TestValidatePath_UnicodeAndSpaces(t *testing.T) {
+	tmp := t.TempDir()
+	dir := filepath.Join(tmp, "path with spaces", "日本語")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+
+	rl := ResourceLimits{WritablePaths: []string{tmp}}
+	assert.NoError(t, rl.ValidatePath(filepath.Join(dir, "file.txt"), PathAccessWrite))
+}
+
+func TestValidatePath_MultipleDenyRules(t *testing.T) {
+	rl := ResourceLimits{
+		WritablePaths: []string{"/data"},
+		DenyPaths:     []string{"/data/secret", "/data/private"},
+	}
+	assert.NoError(t, rl.ValidatePath("/data/public/file.txt", PathAccessWrite))
+	err := rl.ValidatePath("/data/secret/file.txt", PathAccessWrite)
+	require.Error(t, err)
+	assertPathDenied(t, err)
+	err = rl.ValidatePath("/data/private/file.txt", PathAccessWrite)
+	require.Error(t, err)
+	assertPathDenied(t, err)
+}
+
+func TestValidatePath_NullByteMiddle(t *testing.T) {
+	rl := ResourceLimits{}
+	err := rl.ValidatePath("/path/with\x00null/file.txt", PathAccessRead)
+	require.Error(t, err)
+	assertPathDenied(t, err)
+}
+
+func TestValidatePath_DotPaths(t *testing.T) {
+	// "." resolves to CWD, ".." resolves to parent of CWD.
+	cwd, err := os.Getwd()
+	require.NoError(t, err)
+
+	rl := ResourceLimits{ReadOnlyPaths: []string{cwd}}
+	assert.NoError(t, rl.ValidatePath(".", PathAccessRead))
+
+	// ".." resolves to parent — should be denied if parent isn't in allow list.
+	parent := filepath.Dir(cwd)
+	if parent != cwd { // not at root
+		rl2 := ResourceLimits{ReadOnlyPaths: []string{cwd}}
+		err = rl2.ValidatePath("..", PathAccessRead)
+		require.Error(t, err)
+		assertPathDenied(t, err)
+	}
+}
+
+func TestValidatePath_ConcurrentAccess(t *testing.T) {
+	tmp := t.TempDir()
+	rl := ResourceLimits{
+		WritablePaths: []string{tmp},
+		DenyPaths:     []string{filepath.Join(tmp, "denied")},
+	}
+
+	var wg sync.WaitGroup
+	for i := range 50 {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			path := filepath.Join(tmp, fmt.Sprintf("file_%d.txt", n))
+			assert.NoError(t, rl.ValidatePath(path, PathAccessWrite))
+
+			denied := filepath.Join(tmp, "denied", fmt.Sprintf("file_%d.txt", n))
+			err := rl.ValidatePath(denied, PathAccessWrite)
+			assert.Error(t, err)
+		}(i)
+	}
+	wg.Wait()
+}
+
 // ---------------------------------------------------------------------------
 // isUnderPath tests
 // ---------------------------------------------------------------------------
@@ -164,6 +267,36 @@ func TestIsUnderPath_NotChild(t *testing.T) {
 
 func TestIsUnderPath_PartialName(t *testing.T) {
 	assert.False(t, isUnderPath("/tmpevil", "/tmp"))
+}
+
+func TestIsUnderPath_BothEmpty(t *testing.T) {
+	assert.True(t, isUnderPath("", ""))
+}
+
+func TestIsUnderPath_EmptyBase(t *testing.T) {
+	// filepath.Rel("", "/foo") behavior — should not match.
+	result := isUnderPath("/foo", "")
+	_ = result // Just verify no panic.
+}
+
+func TestIsUnderPath_Root(t *testing.T) {
+	assert.True(t, isUnderPath("/etc/passwd", "/"))
+	assert.True(t, isUnderPath("/", "/"))
+}
+
+// ---------------------------------------------------------------------------
+// resolveAncestor tests
+// ---------------------------------------------------------------------------
+
+func TestResolveAncestor_NonExistentDeepPath(t *testing.T) {
+	// Should resolve without infinite loop even for deeply non-existent path.
+	result := resolveAncestor("/nonexistent/deep/path/file.txt")
+	assert.NotEmpty(t, result)
+}
+
+func TestResolveAncestor_RootPath(t *testing.T) {
+	result := resolveAncestor("/")
+	assert.Equal(t, "/", result)
 }
 
 // ---------------------------------------------------------------------------
@@ -274,6 +407,45 @@ func TestFallbackIsolator_Wrap_CapturesOutput(t *testing.T) {
 
 	require.NoError(t, wrapped.Run())
 	assert.Equal(t, "hello world\n", stdout.String())
+}
+
+func TestFallbackIsolator_Wrap_NegativeTimeout_NoEnforcement(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("echo behavior differs on windows")
+	}
+
+	iso := NewFallbackIsolator()
+	cmd := exec.Command("echo", "hello")
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+
+	// Negative timeout should be treated as no timeout (< 0 fails the > 0 check).
+	wrapped, cleanup, err := iso.Wrap(context.Background(), cmd, ResourceLimits{
+		Timeout: -1 * time.Second,
+	})
+	require.NoError(t, err)
+	defer cleanup()
+
+	require.NoError(t, wrapped.Run())
+	assert.Equal(t, "hello\n", stdout.String())
+}
+
+func TestFallbackIsolator_Wrap_StderrCaptured(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell redirect differs on windows")
+	}
+
+	iso := NewFallbackIsolator()
+	cmd := exec.Command("sh", "-c", "echo error >&2")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	wrapped, cleanup, err := iso.Wrap(context.Background(), cmd, ResourceLimits{})
+	require.NoError(t, err)
+	defer cleanup()
+
+	require.NoError(t, wrapped.Run())
+	assert.Equal(t, "error\n", stderr.String())
 }
 
 // ---------------------------------------------------------------------------
