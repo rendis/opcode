@@ -10,7 +10,7 @@ description: >
   sending signals, or querying workflow history.
 license: MIT
 metadata:
-  version: "1.0.1"
+  version: "1.0.2"
   transport: stdio
   openclaw:
     emoji: "⚙️"
