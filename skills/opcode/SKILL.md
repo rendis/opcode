@@ -15,6 +15,8 @@ metadata:
   openclaw:
     emoji: "⚙️"
     os: ["darwin", "linux"]
+    user-invocable: true
+    repository: "https://github.com/rendis/opcode"
     primaryEnv: "OPCODE_VAULT_KEY"
     requires:
       bins: ["go"]
@@ -112,6 +114,26 @@ The MCP client launches the binary, communicates via stdio, and exposes the 5 to
 4. Starts cron scheduler (recovers missed jobs)
 5. Begins listening for MCP JSON-RPC on stdin/stdout
 6. Shuts down gracefully on SIGTERM/SIGINT (10s timeout)
+
+### Security Model
+
+Built-in actions respect `ResourceLimits` configured at startup:
+
+| Control        | Description                                                                                                |
+| -------------- | ---------------------------------------------------------------------------------------------------------- |
+| **Filesystem** | `DenyPaths` / `ReadOnlyPaths` / `WritablePaths` restrict file access. Symlink resolution prevents escapes. |
+| **Shell**      | Linux: cgroups v2 (memory, CPU, PID namespace). macOS: timeout-only fallback.                              |
+| **HTTP**       | `MaxResponseBody` (10 MB) and `DefaultTimeout` (30 s).                                                     |
+
+**Defaults are permissive** (no path deny-lists, no network restrictions). For production:
+
+- Set `DenyPaths` for sensitive directories (`/etc/shadow`, `~/.ssh`)
+- Set `WritablePaths` to constrain write scope
+- Run the opcode process under a restricted OS user
+- Use a network proxy/firewall for HTTP egress control
+- Treat `OPCODE_VAULT_KEY` as root-equivalent for stored secrets
+
+Crypto, assert, and workflow actions perform no I/O beyond the opcode database.
 
 ## MCP Tools
 
@@ -337,6 +359,7 @@ See [patterns.md](references/patterns.md#10-scripting-with-shellexec) for full t
 3. Workflow status becomes `suspended`
 4. Agent calls `opcode.status` to see pending decision with context and options
 5. Agent resolves via `opcode.signal`:
+
    ```json
    {
      "workflow_id": "...",
@@ -345,6 +368,7 @@ See [patterns.md](references/patterns.md#10-scripting-with-shellexec) for full t
      "payload": { "choice": "approve" }
    }
    ```
+
 6. Workflow auto-resumes after signal
 7. If timeout expires: `fallback` option auto-selected, or step fails if no fallback
 
