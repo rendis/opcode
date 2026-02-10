@@ -2,9 +2,16 @@
 
 package isolation
 
+import "log/slog"
+
 // NewIsolator returns the platform-appropriate Isolator.
-// On Linux, this will return LinuxIsolator (cgroups v2) once story 023 is implemented.
-// For now, falls back to FallbackIsolator.
+// On Linux, attempts LinuxIsolator (cgroups v2). Falls back to FallbackIsolator
+// if cgroups v2 is unavailable.
 func NewIsolator() (Isolator, error) {
-	return NewFallbackIsolator(), nil
+	iso, err := NewLinuxIsolator()
+	if err != nil {
+		slog.Warn("isolation: cgroups v2 unavailable, using fallback (timeout only)", "error", err)
+		return NewFallbackIsolator(), nil
+	}
+	return iso, nil
 }

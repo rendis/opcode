@@ -131,7 +131,8 @@ func resolveCleanPath(path string) (string, error) {
 // resolves symlinks on that ancestor, and re-appends the unresolved suffix.
 func resolveAncestor(path string) string {
 	dir := path
-	for range 256 { // Defensive depth limit.
+	const maxPathDepth = 256 // Exceeds typical Linux PATH_MAX nesting.
+	for range maxPathDepth {
 		parent := filepath.Dir(dir)
 		if parent == dir {
 			break // reached root
@@ -175,6 +176,10 @@ type IsolatorCaps struct {
 // Isolator wraps a command with platform-specific process isolation.
 // Implementations are auto-detected at startup: Linux → Cgroups v2, Fallback → os/exec + timeout.
 type Isolator interface {
+	// Wrap returns an isolated *exec.Cmd and a cleanup function.
+	// The cleanup function MUST be called after the command completes (or fails to start).
+	// It is safe to defer cleanup() immediately after Wrap() returns. Cleanup is idempotent.
+	// The caller must use the returned *exec.Cmd, not the original.
 	Wrap(ctx context.Context, cmd *exec.Cmd, limits ResourceLimits) (*exec.Cmd, func(), error)
 	Capabilities() IsolatorCaps
 }

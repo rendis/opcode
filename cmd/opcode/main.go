@@ -2,10 +2,15 @@ package main
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 )
 
 func main() {
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+		Level: slog.LevelInfo,
+	})))
+
 	// DI wiring — built incrementally per cycle.
 	// Cycle 1: Store (libSQL) → Executor → WorkerPool
 	// Cycle 2: Expressions, Validation, Resilience

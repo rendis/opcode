@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -473,6 +474,24 @@ func TestNewIsolator_SatisfiesInterface(t *testing.T) {
 	require.NoError(t, err)
 	// Verify interface is satisfied at runtime.
 	var _ Isolator = iso
+}
+
+func TestNewIsolator_NonLinux_LogsWarning(t *testing.T) {
+	if runtime.GOOS == "linux" {
+		t.Skip("this test verifies non-Linux factory warning")
+	}
+
+	var buf bytes.Buffer
+	handler := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})
+	orig := slog.Default()
+	slog.SetDefault(slog.New(handler))
+	defer slog.SetDefault(orig)
+
+	_, err := NewIsolator()
+	require.NoError(t, err)
+
+	assert.Contains(t, buf.String(), "fallback")
+	assert.Contains(t, buf.String(), "WARN")
 }
 
 // ---------------------------------------------------------------------------
