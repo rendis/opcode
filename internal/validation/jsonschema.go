@@ -52,7 +52,7 @@ const workflowSchemaJSON = `{
         },
         "type": {
           "type": "string",
-          "enum": ["action", "condition", "reasoning", "parallel", "loop"]
+          "enum": ["action", "condition", "reasoning", "parallel", "loop", "wait"]
         },
         "action": { "type": "string" },
         "params": {},

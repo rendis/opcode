@@ -8,3 +8,9 @@ type Validator interface {
 	ValidateDefinition(def *schema.WorkflowDefinition) error
 	ValidateInput(input map[string]any, inputSchema []byte) error
 }
+
+// ActionLookup checks whether a named action is registered.
+// Satisfied by *actions.Registry (which has Has(string) bool).
+type ActionLookup interface {
+	Has(name string) bool
+}
