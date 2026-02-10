@@ -31,6 +31,7 @@ func (v *interpMockVault) Resolve(_ context.Context, key string) ([]byte, error)
 
 func (v *interpMockVault) Store(_ context.Context, _ string, _ []byte) error { return nil }
 func (v *interpMockVault) Delete(_ context.Context, _ string) error          { return nil }
+func (v *interpMockVault) List(_ context.Context) ([]string, error)          { return nil, nil }
 
 // --- helpers ---
 

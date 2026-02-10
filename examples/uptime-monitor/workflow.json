@@ -1,0 +1,85 @@
+{
+  "name": "uptime-monitor",
+  "description": "Check multiple endpoints for availability and send an alert notification with results.",
+  "category": "monitoring",
+  "features": ["loop", "http", "workflow.log"],
+  "input_schema": {
+    "type": "object",
+    "required": ["endpoints", "alert_webhook_url"],
+    "properties": {
+      "endpoints": {
+        "type": "array",
+        "description": "List of endpoint objects with 'name' and 'url' fields",
+        "items": {
+          "type": "object",
+          "properties": {
+            "name": { "type": "string" },
+            "url": { "type": "string" }
+          }
+        }
+      },
+      "alert_webhook_url": {
+        "type": "string",
+        "description": "Webhook URL to send alert notifications when endpoints are down"
+      }
+    }
+  },
+  "definition": {
+    "timeout": "5m",
+    "on_timeout": "fail",
+    "steps": [
+      {
+        "id": "check-endpoints",
+        "type": "loop",
+        "config": {
+          "mode": "for_each",
+          "over": "inputs.endpoints",
+          "max_iter": 50,
+          "body": [
+            {
+              "id": "ping",
+              "type": "action",
+              "action": "http.get",
+              "params": {
+                "url": "${{loop.item.url}}"
+              },
+              "timeout": "5s",
+              "on_error": {
+                "strategy": "ignore"
+              }
+            },
+            {
+              "id": "log-status",
+              "type": "action",
+              "action": "workflow.log",
+              "depends_on": ["ping"],
+              "params": {
+                "message": "Checked endpoint",
+                "endpoint_name": "${{loop.item.name}}",
+                "url": "${{loop.item.url}}"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "send-alert",
+        "type": "action",
+        "action": "http.post",
+        "depends_on": ["check-endpoints"],
+        "params": {
+          "url": "${{inputs.alert_webhook_url}}",
+          "body": {
+            "message": "Uptime monitor cycle complete"
+          }
+        },
+        "timeout": "15s",
+        "retry": {
+          "max": 2,
+          "backoff": "linear",
+          "delay": "1s"
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,79 @@
+{
+  "name": "task-triage",
+  "description": "Fetch new tickets, loop through each for agent-driven priority triage via reasoning.",
+  "category": "operations",
+  "features": ["http", "loop", "reasoning"],
+  "input_schema": {
+    "type": "object",
+    "required": ["tickets_url", "update_url"],
+    "properties": {
+      "tickets_url": {
+        "type": "string",
+        "description": "API URL to fetch new tickets (returns JSON array)"
+      },
+      "update_url": {
+        "type": "string",
+        "description": "API URL to POST ticket updates to (ticket_id appended as path)"
+      }
+    }
+  },
+  "definition": {
+    "timeout": "30m",
+    "on_timeout": "suspend",
+    "steps": [
+      {
+        "id": "fetch-tickets",
+        "type": "action",
+        "action": "http.get",
+        "params": {
+          "url": "${{inputs.tickets_url}}"
+        },
+        "timeout": "30s",
+        "retry": {
+          "max": 2,
+          "backoff": "exponential",
+          "delay": "1s"
+        }
+      },
+      {
+        "id": "triage-loop",
+        "type": "loop",
+        "depends_on": ["fetch-tickets"],
+        "config": {
+          "mode": "for_each",
+          "over": "steps['fetch-tickets'].body",
+          "max_iter": 50,
+          "body": [
+            {
+              "id": "prioritize",
+              "type": "reasoning",
+              "config": {
+                "prompt_context": "What priority should this task have and who should handle it? Consider severity, impact, and available team members.",
+                "options": [
+                  { "id": "p0-critical", "description": "Critical — requires immediate attention from senior engineer" },
+                  { "id": "p1-high", "description": "High — should be addressed within hours" },
+                  { "id": "p2-medium", "description": "Medium — address within the current sprint" },
+                  { "id": "p3-low", "description": "Low — backlog, address when capacity allows" }
+                ],
+                "data_inject": {
+                  "ticket": "loop.item"
+                },
+                "timeout": "5m",
+                "fallback": "p2-medium"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "log-complete",
+        "type": "action",
+        "action": "workflow.log",
+        "depends_on": ["triage-loop"],
+        "params": {
+          "message": "Triage complete for all fetched tickets."
+        }
+      }
+    ]
+  }
+}

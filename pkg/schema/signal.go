@@ -15,6 +15,7 @@ const (
 type Signal struct {
 	Type      SignalType     `json:"type"`
 	StepID    string         `json:"step_id,omitempty"`
+	AgentID   string         `json:"agent_id,omitempty"`
 	Payload   map[string]any `json:"payload,omitempty"`
 	Reasoning string         `json:"reasoning,omitempty"`
 }

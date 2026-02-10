@@ -1,0 +1,141 @@
+{
+  "name": "sync-drift-detection",
+  "description": "Fetch two data sources in parallel, compare hashes for drift, triage via reasoning, and sync if approved.",
+  "category": "data",
+  "features": ["parallel", "http", "crypto", "condition", "reasoning"],
+  "input_schema": {
+    "type": "object",
+    "required": ["source_a_url", "source_b_url", "sync_url"],
+    "properties": {
+      "source_a_url": {
+        "type": "string",
+        "description": "URL for primary data source"
+      },
+      "source_b_url": {
+        "type": "string",
+        "description": "URL for secondary data source"
+      },
+      "sync_url": {
+        "type": "string",
+        "description": "URL to POST sync/load data to"
+      }
+    }
+  },
+  "definition": {
+    "timeout": "5m",
+    "on_timeout": "fail",
+    "steps": [
+      {
+        "id": "fetch-a",
+        "type": "action",
+        "action": "http.get",
+        "params": {
+          "url": "${{inputs.source_a_url}}"
+        },
+        "timeout": "30s",
+        "retry": {
+          "max": 2,
+          "backoff": "exponential",
+          "delay": "1s"
+        }
+      },
+      {
+        "id": "fetch-b",
+        "type": "action",
+        "action": "http.get",
+        "params": {
+          "url": "${{inputs.source_b_url}}"
+        },
+        "timeout": "30s",
+        "retry": {
+          "max": 2,
+          "backoff": "exponential",
+          "delay": "1s"
+        }
+      },
+      {
+        "id": "hash-a",
+        "type": "action",
+        "action": "crypto.hash",
+        "depends_on": ["fetch-a"],
+        "params": {
+          "algorithm": "sha256",
+          "data": "${{steps.fetch-a.output.content_type}}"
+        }
+      },
+      {
+        "id": "hash-b",
+        "type": "action",
+        "action": "crypto.hash",
+        "depends_on": ["fetch-b"],
+        "params": {
+          "algorithm": "sha256",
+          "data": "${{steps.fetch-b.output.content_type}}"
+        }
+      },
+      {
+        "id": "check-drift",
+        "type": "condition",
+        "depends_on": ["hash-a", "hash-b"],
+        "config": {
+          "expression": "steps['hash-a'].hash != steps['hash-b'].hash",
+          "branches": {
+            "true": [
+              {
+                "id": "triage-drift",
+                "type": "reasoning",
+                "config": {
+                  "prompt_context": "Drift has been detected between the two data sources. Review the changes and decide whether to approve an automatic sync or investigate manually.",
+                  "options": [
+                    { "id": "sync", "description": "Approve automatic sync to reconcile drift" },
+                    { "id": "investigate", "description": "Hold sync, investigate differences manually" }
+                  ],
+                  "data_inject": {
+                    "hash_a": "steps['hash-a'].hash",
+                    "hash_b": "steps['hash-b'].hash",
+                    "source_a": "inputs.source_a_url",
+                    "source_b": "inputs.source_b_url"
+                  },
+                  "timeout": "1h",
+                  "fallback": "investigate"
+                }
+              },
+              {
+                "id": "sync-data",
+                "type": "action",
+                "action": "http.post",
+                "depends_on": ["triage-drift"],
+                "condition": "steps['check-drift.true.triage-drift'].choice == 'sync'",
+                "params": {
+                  "url": "${{inputs.sync_url}}",
+                  "body": {
+                    "action": "sync",
+                    "source": "${{inputs.source_a_url}}",
+                    "hash_a": "${{steps.hash-a.output.hash}}",
+                    "hash_b": "${{steps.hash-b.output.hash}}"
+                  }
+                },
+                "timeout": "30s",
+                "retry": {
+                  "max": 2,
+                  "backoff": "exponential",
+                  "delay": "2s"
+                }
+              }
+            ],
+            "false": [
+              {
+                "id": "log-no-drift",
+                "type": "action",
+                "action": "workflow.log",
+                "params": {
+                  "message": "No drift detected between sources"
+                }
+              }
+            ]
+          }
+        }
+      }
+    ]
+  }
+}

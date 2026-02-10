@@ -1,0 +1,84 @@
+{
+  "name": "data-anonymizer",
+  "description": "Read a dataset file, hash specified PII fields using crypto.hash, and copy the result to output.",
+  "category": "data",
+  "features": ["fs", "loop", "crypto"],
+  "input_schema": {
+    "type": "object",
+    "required": ["input_path", "output_path", "pii_fields"],
+    "properties": {
+      "input_path": {
+        "type": "string",
+        "description": "Path to the input JSON dataset file"
+      },
+      "output_path": {
+        "type": "string",
+        "description": "Path to write the anonymized output"
+      },
+      "pii_fields": {
+        "type": "array",
+        "description": "List of field names to anonymize (e.g. ['email', 'name', 'phone'])",
+        "items": { "type": "string" }
+      }
+    }
+  },
+  "definition": {
+    "timeout": "5m",
+    "on_timeout": "fail",
+    "steps": [
+      {
+        "id": "read-data",
+        "type": "action",
+        "action": "fs.stat",
+        "params": {
+          "path": "${{inputs.input_path}}"
+        },
+        "timeout": "15s"
+      },
+      {
+        "id": "hash-fields",
+        "type": "loop",
+        "depends_on": ["read-data"],
+        "config": {
+          "mode": "for_each",
+          "over": "inputs.pii_fields",
+          "max_iter": 50,
+          "body": [
+            {
+              "id": "hash-field",
+              "type": "action",
+              "action": "crypto.hash",
+              "params": {
+                "algorithm": "sha256",
+                "data": "${{loop.item}}"
+              },
+              "timeout": "5s"
+            }
+          ]
+        }
+      },
+      {
+        "id": "log-anonymized",
+        "type": "action",
+        "action": "workflow.log",
+        "depends_on": ["hash-fields"],
+        "params": {
+          "message": "PII fields hashed successfully",
+          "input_path": "${{inputs.input_path}}",
+          "output_path": "${{inputs.output_path}}"
+        }
+      },
+      {
+        "id": "write-output",
+        "type": "action",
+        "action": "fs.copy",
+        "depends_on": ["log-anonymized"],
+        "params": {
+          "src": "${{inputs.input_path}}",
+          "dst": "${{inputs.output_path}}"
+        },
+        "timeout": "15s"
+      }
+    ]
+  }
+}

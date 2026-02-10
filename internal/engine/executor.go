@@ -3,12 +3,14 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
 
 	"github.com/rendis/opcode/internal/actions"
 	"github.com/rendis/opcode/internal/expressions"
+	"github.com/rendis/opcode/internal/reasoning"
 	"github.com/rendis/opcode/internal/secrets"
 	"github.com/rendis/opcode/internal/store"
 	"github.com/rendis/opcode/pkg/schema"
@@ -276,6 +278,29 @@ func (e *executorImpl) Resume(ctx context.Context, workflowID string) (*Executio
 		}
 	}
 
+	// Resolve any expired decisions before resuming.
+	if err := e.resolveExpiredDecisions(ctx, workflowID, stepStates); err != nil {
+		// Decision timed out without fallback — fail the workflow.
+		now := time.Now().UTC()
+		failedStatus := schema.WorkflowStatusFailed
+		_ = e.store.UpdateWorkflow(ctx, workflowID, store.WorkflowUpdate{
+			Status:      &failedStatus,
+			CompletedAt: &now,
+		})
+		_ = e.wfFSM.Transition(ctx, workflowID, wf.Status, schema.WorkflowStatusFailed)
+		var opErr *schema.OpcodeError
+		if !errors.As(err, &opErr) {
+			opErr = schema.NewErrorf(schema.ErrCodeTimeout, "decision timeout: %s", err.Error())
+		}
+		return &ExecutionResult{
+			WorkflowID:  workflowID,
+			Status:      schema.WorkflowStatusFailed,
+			Error:       opErr,
+			CompletedAt: &now,
+			Steps:       make(map[string]*StepResult),
+		}, nil
+	}
+
 	// If suspended, transition back to active.
 	if wf.Status == schema.WorkflowStatusSuspended {
 		if err := e.wfFSM.Transition(ctx, workflowID, wf.Status, schema.WorkflowStatusActive); err != nil {
@@ -366,8 +391,8 @@ func (e *executorImpl) Signal(ctx context.Context, workflowID string, signal sch
 		return nil
 	}
 
-	// If not running, handle decision resolution for suspended workflows.
-	if signal.Type == schema.SignalDecision && signal.StepID != "" {
+	// If not running, handle decision signals for suspended workflows.
+	if signal.StepID != "" && (signal.Type == schema.SignalDecision || signal.Type == schema.SignalCancel) {
 		decisions, err := e.store.ListPendingDecisions(ctx, store.DecisionFilter{
 			WorkflowID: workflowID,
 			Status:     "pending",
@@ -376,30 +401,59 @@ func (e *executorImpl) Signal(ctx context.Context, workflowID string, signal sch
 			return schema.NewErrorf(schema.ErrCodeStore, "list decisions: %s", err.Error()).WithCause(err)
 		}
 		for _, d := range decisions {
-			if d.StepID == signal.StepID {
-				choice, ok := signal.Payload["choice"].(string)
-				if !ok || choice == "" {
-					return schema.NewError(schema.ErrCodeValidation, "signal payload missing valid 'choice' field")
-				}
-				resolution := &store.Resolution{
-					Choice:    choice,
-					Reasoning: signal.Reasoning,
-				}
-				if err := e.store.ResolveDecision(ctx, d.ID, resolution); err != nil {
-					return schema.NewErrorf(schema.ErrCodeStore, "resolve decision: %s", err.Error()).WithCause(err)
-				}
-				// Emit decision resolved event.
-				resPayload, _ := json.Marshal(resolution)
-				if err := e.eventLog.AppendEvent(ctx, &store.Event{
-					WorkflowID: workflowID,
-					StepID:     signal.StepID,
-					Type:       schema.EventDecisionResolved,
-					Payload:    resPayload,
-				}); err != nil {
-					return schema.NewErrorf(schema.ErrCodeStore, "emit decision resolved: %s", err.Error()).WithCause(err)
+			if d.StepID != signal.StepID {
+				continue
+			}
+
+			// Validate multi-agent routing: reject if targeted to a different agent.
+			if d.TargetAgentID != "" && signal.AgentID != "" && signal.AgentID != d.TargetAgentID {
+				return schema.NewErrorf(schema.ErrCodeValidation,
+					"decision targeted to agent %q, signal from %q", d.TargetAgentID, signal.AgentID)
+			}
+
+			if signal.Type == schema.SignalCancel {
+				if err := e.store.CancelDecision(ctx, d.ID); err != nil {
+					return schema.NewErrorf(schema.ErrCodeStore, "cancel decision: %s", err.Error()).WithCause(err)
 				}
 				return nil
 			}
+
+			// SignalDecision: resolve the decision.
+			choice, ok := signal.Payload["choice"].(string)
+			if !ok || choice == "" {
+				return schema.NewError(schema.ErrCodeValidation, "signal payload missing valid 'choice' field")
+			}
+			// Validate choice against available options.
+			var opts []schema.ReasoningOption
+			if len(d.Options) > 0 {
+				if err := json.Unmarshal(d.Options, &opts); err == nil {
+					if err := reasoning.ValidateResolution(opts, choice); err != nil {
+						return err
+					}
+				}
+			}
+			resolution := &store.Resolution{
+				Choice:     choice,
+				Reasoning:  signal.Reasoning,
+				ResolvedBy: signal.AgentID,
+			}
+			if data, ok := signal.Payload["data"].(map[string]any); ok {
+				resolution.Data = data
+			}
+			if err := e.store.ResolveDecision(ctx, d.ID, resolution); err != nil {
+				return schema.NewErrorf(schema.ErrCodeStore, "resolve decision: %s", err.Error()).WithCause(err)
+			}
+			// Emit decision resolved event.
+			resPayload, _ := json.Marshal(resolution)
+			if err := e.eventLog.AppendEvent(ctx, &store.Event{
+				WorkflowID: workflowID,
+				StepID:     signal.StepID,
+				Type:       schema.EventDecisionResolved,
+				Payload:    resPayload,
+			}); err != nil {
+				return schema.NewErrorf(schema.ErrCodeStore, "emit decision resolved: %s", err.Error()).WithCause(err)
+			}
+			return nil
 		}
 		return schema.NewErrorf(schema.ErrCodeNotFound, "no pending decision for step %s", signal.StepID)
 	}
@@ -738,11 +792,11 @@ func (e *executorImpl) executeStep(ctx context.Context, run *workflowRun, workfl
 	case schema.StepTypeReasoning:
 		execErr = e.executeReasoningStep(stepCtx, run, workflowID, stepID, stepDef)
 		if execErr == nil {
-			// Check if suspended.
+			// Check if suspended or skipped (cancelled decision).
 			run.mu.Lock()
 			status := run.stepStates[stepID].Status
 			run.mu.Unlock()
-			if status == schema.StepStatusSuspended {
+			if status == schema.StepStatusSuspended || status == schema.StepStatusSkipped {
 				return nil
 			}
 		}
@@ -859,25 +913,99 @@ func (e *executorImpl) executeReasoningStep(ctx context.Context, run *workflowRu
 		return schema.NewErrorf(schema.ErrCodeValidation, "invalid reasoning config: %s", err.Error()).WithStep(stepID)
 	}
 
-	// Check if there's already a resolved decision (from replay/signal).
+	// Check if there's already a resolved or cancelled decision (from replay/signal).
 	decisions, err := e.store.ListPendingDecisions(ctx, store.DecisionFilter{
 		WorkflowID: workflowID,
-		Status:     "resolved",
 	})
 	if err == nil {
 		for _, d := range decisions {
-			if d.StepID == stepID && d.Resolution != nil {
+			if d.StepID != stepID {
+				continue
+			}
+			if d.Status == "resolved" && d.Resolution != nil {
 				// Decision already resolved — don't re-request. Reasoning nodes NEVER replay.
+				return nil
+			}
+			if d.Status == "cancelled" {
+				// Decision was cancelled — skip this step.
+				if fsmErr := e.stepFSM.Transition(ctx, workflowID, stepID, schema.StepStatusRunning, schema.StepStatusSkipped); fsmErr != nil {
+					return fsmErr
+				}
+				e.updateStepStatus(run, stepID, schema.StepStatusSkipped)
+				e.persistStepState(workflowID, stepID, run)
+				return nil
+			}
+			if d.Status == "pending" {
+				// Decision already exists and is pending — suspend without re-creating.
+				if fsmErr := e.stepFSM.Transition(ctx, workflowID, stepID, schema.StepStatusRunning, schema.StepStatusSuspended); fsmErr != nil {
+					return fsmErr
+				}
+				e.updateStepStatus(run, stepID, schema.StepStatusSuspended)
+				e.persistStepState(workflowID, stepID, run)
 				return nil
 			}
 		}
 	}
 
-	// Create pending decision.
-	optionsJSON, _ := json.Marshal(cfg.Options)
-	contextJSON, _ := json.Marshal(map[string]string{
-		"prompt_context": cfg.PromptContext,
-	})
+	// Build rich context for the decision.
+	optionsJSON, err := json.Marshal(cfg.Options)
+	if err != nil {
+		return schema.NewErrorf(schema.ErrCodeValidation, "marshal reasoning options: %s", err.Error()).WithStep(stepID)
+	}
+	ctxParams := reasoning.ContextParams{Config: cfg}
+
+	// Collect completed step outputs.
+	run.mu.Lock()
+	outputs := make(map[string]any)
+	for sid, ss := range run.stepStates {
+		if ss.Status == schema.StepStatusCompleted && len(ss.Output) > 0 {
+			var out any
+			if err := json.Unmarshal(ss.Output, &out); err == nil {
+				outputs[sid] = out
+			}
+		}
+	}
+	run.mu.Unlock()
+	ctxParams.StepOutputs = outputs
+
+	// Load workflow context (intent, notes, accumulated data).
+	if wfCtx, err := e.store.GetWorkflowContext(ctx, workflowID); err == nil && wfCtx != nil {
+		ctxParams.WorkflowIntent = wfCtx.OriginalIntent
+		ctxParams.AgentNotes = wfCtx.AgentNotes
+		if len(wfCtx.AccumulatedData) > 0 {
+			var accum map[string]any
+			if err := json.Unmarshal(wfCtx.AccumulatedData, &accum); err == nil {
+				ctxParams.AccumulatedData = accum
+			}
+		}
+	}
+
+	// Resolve DataInject references via interpolation.
+	if len(cfg.DataInject) > 0 {
+		scope := e.buildInterpolationScope(run, workflowID, nil)
+		resolved := make(map[string]any, len(cfg.DataInject))
+		for key, expr := range cfg.DataInject {
+			exprJSON, _ := json.Marshal(expr)
+			if expressions.HasInterpolation(exprJSON) {
+				val, err := e.interpolator.Resolve(ctx, exprJSON, scope)
+				if err == nil {
+					var v any
+					if err := json.Unmarshal(val, &v); err == nil {
+						resolved[key] = v
+					} else {
+						resolved[key] = string(val)
+					}
+				} else {
+					resolved[key] = expr // keep raw on error
+				}
+			} else {
+				resolved[key] = expr
+			}
+		}
+		ctxParams.ResolvedInjects = resolved
+	}
+
+	contextJSON := reasoning.BuildDecisionContext(ctxParams)
 
 	decision := &store.PendingDecision{
 		ID:         fmt.Sprintf("%s_%s", workflowID, stepID),
@@ -921,6 +1049,65 @@ func (e *executorImpl) executeReasoningStep(ctx context.Context, run *workflowRu
 	e.updateStepStatus(run, stepID, schema.StepStatusSuspended)
 	e.persistStepState(workflowID, stepID, run)
 
+	return nil
+}
+
+// resolveExpiredDecisions checks for pending decisions that have exceeded their timeout.
+// For each expired decision: auto-resolve with fallback if set, or return an error.
+// Called from Resume() before executing the DAG.
+func (e *executorImpl) resolveExpiredDecisions(ctx context.Context, workflowID string, stepStates map[string]*store.StepState) error {
+	decisions, err := e.store.ListPendingDecisions(ctx, store.DecisionFilter{
+		WorkflowID: workflowID,
+		Status:     "pending",
+	})
+	if err != nil {
+		return nil // best-effort; don't block resume
+	}
+
+	now := time.Now().UTC()
+	for _, d := range decisions {
+		if d.TimeoutAt == nil || now.Before(*d.TimeoutAt) {
+			continue
+		}
+
+		if d.Fallback != "" {
+			// Auto-resolve with fallback option.
+			resolution := &store.Resolution{
+				Choice:     d.Fallback,
+				Reasoning:  "timeout_auto_resolved",
+				ResolvedBy: "system",
+			}
+			if err := e.store.ResolveDecision(ctx, d.ID, resolution); err != nil {
+				continue
+			}
+			resPayload, _ := json.Marshal(resolution)
+			_ = e.eventLog.AppendEvent(ctx, &store.Event{
+				WorkflowID: workflowID,
+				StepID:     d.StepID,
+				Type:       schema.EventDecisionResolved,
+				Payload:    resPayload,
+			})
+		} else {
+			// No fallback — fail the step and return error to abort resume.
+			_ = e.store.ResolveDecision(ctx, d.ID, &store.Resolution{
+				Choice:     "",
+				Reasoning:  "timeout_no_fallback",
+				ResolvedBy: "system",
+			})
+			_ = e.eventLog.AppendEvent(ctx, &store.Event{
+				WorkflowID: workflowID,
+				StepID:     d.StepID,
+				Type:       schema.EventStepFailed,
+				Payload:    json.RawMessage(`{"error":"decision timeout: no fallback option configured"}`),
+			})
+			if ss, ok := stepStates[d.StepID]; ok {
+				ss.Status = schema.StepStatusFailed
+				ss.Error = json.RawMessage(`"decision timeout: no fallback option configured"`)
+			}
+			return schema.NewErrorf(schema.ErrCodeTimeout,
+				"decision timeout for step %s: no fallback option configured", d.StepID).WithStep(d.StepID)
+		}
+	}
 	return nil
 }
 

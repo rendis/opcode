@@ -1,0 +1,93 @@
+{
+  "name": "escalation-ladder",
+  "description": "Auto-check a service, escalate through reasoning if unhealthy, with wait-before-retry and webhook notification.",
+  "category": "operations",
+  "features": ["http", "condition", "reasoning", "wait"],
+  "input_schema": {
+    "type": "object",
+    "required": ["health_url", "escalation_webhook_url"],
+    "properties": {
+      "health_url": {
+        "type": "string",
+        "description": "URL to perform the health check against"
+      },
+      "escalation_webhook_url": {
+        "type": "string",
+        "description": "Webhook URL for escalation notifications"
+      }
+    }
+  },
+  "definition": {
+    "timeout": "15m",
+    "on_timeout": "fail",
+    "steps": [
+      {
+        "id": "auto-check",
+        "type": "action",
+        "action": "http.get",
+        "params": {
+          "url": "${{inputs.health_url}}"
+        },
+        "timeout": "15s",
+        "retry": {
+          "max": 2,
+          "backoff": "exponential",
+          "delay": "3s"
+        }
+      },
+      {
+        "id": "check-health",
+        "type": "condition",
+        "depends_on": ["auto-check"],
+        "config": {
+          "expression": "steps['auto-check'].status_code != 200",
+          "branches": {
+            "true": [
+              {
+                "id": "wait-before-decision",
+                "type": "wait",
+                "config": {
+                  "duration": "1s"
+                }
+              },
+              {
+                "id": "agent-triage",
+                "type": "reasoning",
+                "config": {
+                  "prompt_context": "The automated health check failed. Review the response and decide whether to attempt resolution or escalate to the on-call team.",
+                  "options": [
+                    { "id": "resolve", "description": "Attempt to resolve the issue locally" },
+                    { "id": "escalate", "description": "Escalate to on-call team immediately" }
+                  ],
+                  "data_inject": {
+                    "health_url": "inputs.health_url"
+                  },
+                  "timeout": "2m",
+                  "fallback": "escalate"
+                }
+              },
+              {
+                "id": "log-triage",
+                "type": "action",
+                "action": "workflow.log",
+                "params": {
+                  "message": "Agent triage completed for unhealthy service"
+                }
+              }
+            ],
+            "false": [
+              {
+                "id": "log-healthy",
+                "type": "action",
+                "action": "workflow.log",
+                "params": {
+                  "message": "Health check passed for ${{inputs.health_url}}"
+                }
+              }
+            ]
+          }
+        }
+      }
+    ]
+  }
+}

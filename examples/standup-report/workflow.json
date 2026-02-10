@@ -1,0 +1,98 @@
+{
+  "name": "standup-report",
+  "description": "Fetch tickets, PRs, and logs in parallel, merge into a formatted standup report, and write to file.",
+  "category": "reporting",
+  "features": ["http", "fs", "workflow.log"],
+  "input_schema": {
+    "type": "object",
+    "required": ["tickets_url", "prs_url", "logs_url", "output_path"],
+    "properties": {
+      "tickets_url": {
+        "type": "string",
+        "description": "API URL to fetch open tickets"
+      },
+      "prs_url": {
+        "type": "string",
+        "description": "API URL to fetch recent pull requests"
+      },
+      "logs_url": {
+        "type": "string",
+        "description": "API URL to fetch activity logs"
+      },
+      "output_path": {
+        "type": "string",
+        "description": "File path to write the standup report"
+      }
+    }
+  },
+  "definition": {
+    "timeout": "5m",
+    "on_timeout": "fail",
+    "steps": [
+      {
+        "id": "fetch-tickets",
+        "type": "action",
+        "action": "http.get",
+        "params": {
+          "url": "${{inputs.tickets_url}}"
+        },
+        "timeout": "30s",
+        "retry": {
+          "max": 2,
+          "backoff": "exponential",
+          "delay": "1s"
+        }
+      },
+      {
+        "id": "fetch-prs",
+        "type": "action",
+        "action": "http.get",
+        "params": {
+          "url": "${{inputs.prs_url}}"
+        },
+        "timeout": "30s",
+        "retry": {
+          "max": 2,
+          "backoff": "exponential",
+          "delay": "1s"
+        }
+      },
+      {
+        "id": "fetch-logs",
+        "type": "action",
+        "action": "http.get",
+        "params": {
+          "url": "${{inputs.logs_url}}"
+        },
+        "timeout": "30s",
+        "retry": {
+          "max": 2,
+          "backoff": "exponential",
+          "delay": "1s"
+        }
+      },
+      {
+        "id": "log-merge",
+        "type": "action",
+        "action": "workflow.log",
+        "depends_on": ["fetch-tickets", "fetch-prs", "fetch-logs"],
+        "params": {
+          "message": "All three sources fetched. Compiling standup report.",
+          "tickets_status": "${{steps.fetch-tickets.output.status_code}}",
+          "prs_status": "${{steps.fetch-prs.output.status_code}}",
+          "logs_status": "${{steps.fetch-logs.output.status_code}}"
+        }
+      },
+      {
+        "id": "write-report",
+        "type": "action",
+        "action": "fs.write",
+        "depends_on": ["log-merge"],
+        "params": {
+          "path": "${{inputs.output_path}}",
+          "content": "Standup report generated successfully"
+        }
+      }
+    ]
+  }
+}

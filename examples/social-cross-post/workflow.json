@@ -1,0 +1,125 @@
+{
+  "name": "social-cross-post",
+  "description": "Post content to Twitter, LinkedIn, and a blog API in parallel, tolerating individual failures.",
+  "category": "communication",
+  "features": ["parallel", "http", "on_error", "workflow.log"],
+  "input_schema": {
+    "type": "object",
+    "required": ["content", "twitter_api_url", "linkedin_api_url", "blog_api_url"],
+    "properties": {
+      "content": {
+        "type": "string",
+        "description": "Text content to post across platforms"
+      },
+      "title": {
+        "type": "string",
+        "description": "Post title (used for blog and LinkedIn)"
+      },
+      "twitter_api_url": {
+        "type": "string",
+        "description": "Twitter/X API endpoint"
+      },
+      "linkedin_api_url": {
+        "type": "string",
+        "description": "LinkedIn API endpoint"
+      },
+      "blog_api_url": {
+        "type": "string",
+        "description": "Blog publishing API endpoint"
+      }
+    }
+  },
+  "definition": {
+    "timeout": "3m",
+    "on_timeout": "fail",
+    "steps": [
+      {
+        "id": "cross-post",
+        "type": "parallel",
+        "config": {
+          "mode": "all",
+          "branches": [
+            [
+              {
+                "id": "post-twitter",
+                "type": "action",
+                "action": "http.post",
+                "params": {
+                  "url": "${{inputs.twitter_api_url}}",
+                  "body": {
+                    "status": "${{inputs.content}}"
+                  }
+                },
+                "timeout": "15s",
+                "retry": {
+                  "max": 2,
+                  "backoff": "exponential",
+                  "delay": "1s"
+                },
+                "on_error": {
+                  "strategy": "ignore"
+                }
+              }
+            ],
+            [
+              {
+                "id": "post-linkedin",
+                "type": "action",
+                "action": "http.post",
+                "params": {
+                  "url": "${{inputs.linkedin_api_url}}",
+                  "body": {
+                    "title": "${{inputs.title}}",
+                    "text": "${{inputs.content}}"
+                  }
+                },
+                "timeout": "15s",
+                "retry": {
+                  "max": 2,
+                  "backoff": "exponential",
+                  "delay": "1s"
+                },
+                "on_error": {
+                  "strategy": "ignore"
+                }
+              }
+            ],
+            [
+              {
+                "id": "post-blog",
+                "type": "action",
+                "action": "http.post",
+                "params": {
+                  "url": "${{inputs.blog_api_url}}",
+                  "body": {
+                    "title": "${{inputs.title}}",
+                    "content": "${{inputs.content}}",
+                    "status": "published"
+                  }
+                },
+                "timeout": "15s",
+                "retry": {
+                  "max": 2,
+                  "backoff": "exponential",
+                  "delay": "1s"
+                },
+                "on_error": {
+                  "strategy": "ignore"
+                }
+              }
+            ]
+          ]
+        }
+      },
+      {
+        "id": "log-summary",
+        "type": "action",
+        "action": "workflow.log",
+        "depends_on": ["cross-post"],
+        "params": {
+          "message": "Cross-post complete. Posted to Twitter, LinkedIn, and blog."
+        }
+      }
+    ]
+  }
+}

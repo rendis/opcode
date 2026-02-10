@@ -1,0 +1,111 @@
+{
+  "name": "health-check-sweep",
+  "description": "Check health of multiple endpoints in parallel, then validate each service with a loop.",
+  "category": "observability",
+  "features": ["http", "loop", "crypto", "workflow.log"],
+  "input_schema": {
+    "type": "object",
+    "required": ["endpoint_a", "endpoint_b", "endpoint_c"],
+    "properties": {
+      "endpoint_a": {
+        "type": "string",
+        "description": "Health check URL for endpoint A"
+      },
+      "endpoint_b": {
+        "type": "string",
+        "description": "Health check URL for endpoint B"
+      },
+      "endpoint_c": {
+        "type": "string",
+        "description": "Health check URL for endpoint C"
+      }
+    }
+  },
+  "definition": {
+    "timeout": "5m",
+    "on_timeout": "fail",
+    "steps": [
+      {
+        "id": "check-a",
+        "type": "action",
+        "action": "http.get",
+        "params": {
+          "url": "${{inputs.endpoint_a}}"
+        },
+        "timeout": "15s",
+        "retry": {
+          "max": 2,
+          "backoff": "linear",
+          "delay": "2s"
+        },
+        "on_error": {
+          "strategy": "ignore"
+        }
+      },
+      {
+        "id": "check-b",
+        "type": "action",
+        "action": "http.get",
+        "params": {
+          "url": "${{inputs.endpoint_b}}"
+        },
+        "timeout": "15s",
+        "retry": {
+          "max": 2,
+          "backoff": "linear",
+          "delay": "2s"
+        },
+        "on_error": {
+          "strategy": "ignore"
+        }
+      },
+      {
+        "id": "check-c",
+        "type": "action",
+        "action": "http.get",
+        "params": {
+          "url": "${{inputs.endpoint_c}}"
+        },
+        "timeout": "15s",
+        "retry": {
+          "max": 2,
+          "backoff": "linear",
+          "delay": "2s"
+        },
+        "on_error": {
+          "strategy": "ignore"
+        }
+      },
+      {
+        "id": "validate-services",
+        "type": "loop",
+        "depends_on": ["check-a", "check-b", "check-c"],
+        "config": {
+          "mode": "for_each",
+          "over": "[\"api\", \"db\", \"cache\"]",
+          "max_iter": 10,
+          "body": [
+            {
+              "id": "hash-check",
+              "type": "action",
+              "action": "crypto.hash",
+              "params": {
+                "algorithm": "sha256",
+                "data": "${{loop.item}}"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "log-results",
+        "type": "action",
+        "action": "workflow.log",
+        "depends_on": ["validate-services"],
+        "params": {
+          "message": "Health check sweep completed"
+        }
+      }
+    ]
+  }
+}

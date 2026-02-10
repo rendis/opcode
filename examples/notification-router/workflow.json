@@ -1,0 +1,197 @@
+{
+  "name": "notification-router",
+  "description": "Route notifications by severity: critical triggers multi-channel alert with acknowledgment, warning goes to Slack, info is logged.",
+  "category": "operations",
+  "features": ["condition", "parallel", "http", "reasoning", "workflow.emit", "workflow.log"],
+  "input_schema": {
+    "type": "object",
+    "required": ["severity", "title", "message"],
+    "properties": {
+      "severity": {
+        "type": "string",
+        "description": "Notification severity: critical, warning, or info"
+      },
+      "title": {
+        "type": "string",
+        "description": "Notification title"
+      },
+      "message": {
+        "type": "string",
+        "description": "Notification message body"
+      },
+      "slack_webhook_url": {
+        "type": "string",
+        "description": "Slack webhook URL for notifications"
+      },
+      "email_api_url": {
+        "type": "string",
+        "description": "Email API URL for critical notifications"
+      }
+    }
+  },
+  "definition": {
+    "timeout": "10m",
+    "on_timeout": "fail",
+    "steps": [
+      {
+        "id": "emit-received",
+        "type": "action",
+        "action": "workflow.emit",
+        "params": {
+          "event": "notification.received",
+          "data": {
+            "severity": "${{inputs.severity}}",
+            "title": "${{inputs.title}}"
+          }
+        }
+      },
+      {
+        "id": "route-severity",
+        "type": "condition",
+        "depends_on": ["emit-received"],
+        "config": {
+          "expression": "inputs.severity",
+          "branches": {
+            "critical": [
+              {
+                "id": "critical-alerts",
+                "type": "parallel",
+                "config": {
+                  "mode": "all",
+                  "branches": [
+                    [
+                      {
+                        "id": "slack-critical",
+                        "type": "action",
+                        "action": "http.post",
+                        "params": {
+                          "url": "${{inputs.slack_webhook_url}}",
+                          "body": {
+                            "text": "[CRITICAL] ${{inputs.title}}: ${{inputs.message}}"
+                          }
+                        },
+                        "timeout": "15s",
+                        "retry": {
+                          "max": 3,
+                          "backoff": "exponential",
+                          "delay": "1s"
+                        }
+                      }
+                    ],
+                    [
+                      {
+                        "id": "email-critical",
+                        "type": "action",
+                        "action": "http.post",
+                        "params": {
+                          "url": "${{inputs.email_api_url}}",
+                          "body": {
+                            "subject": "[CRITICAL] ${{inputs.title}}",
+                            "body": "${{inputs.message}}",
+                            "priority": "high"
+                          }
+                        },
+                        "timeout": "15s",
+                        "retry": {
+                          "max": 3,
+                          "backoff": "exponential",
+                          "delay": "1s"
+                        }
+                      }
+                    ],
+                    [
+                      {
+                        "id": "acknowledge",
+                        "type": "reasoning",
+                        "config": {
+                          "prompt_context": "A critical alert has been triggered. Please acknowledge receipt and confirm you are investigating.",
+                          "options": [
+                            { "id": "acknowledged", "description": "Alert acknowledged — investigation underway" },
+                            { "id": "delegated", "description": "Alert delegated to another team member" }
+                          ],
+                          "data_inject": {
+                            "title": "inputs.title",
+                            "message": "inputs.message"
+                          },
+                          "timeout": "5m",
+                          "fallback": "acknowledged"
+                        }
+                      }
+                    ]
+                  ]
+                }
+              },
+              {
+                "id": "emit-critical-sent",
+                "type": "action",
+                "action": "workflow.emit",
+                "depends_on": ["critical-alerts"],
+                "params": {
+                  "event": "notification.critical.sent",
+                  "data": {
+                    "title": "${{inputs.title}}",
+                    "channels": ["slack", "email", "agent"]
+                  }
+                }
+              }
+            ],
+            "warning": [
+              {
+                "id": "slack-warning",
+                "type": "action",
+                "action": "http.post",
+                "params": {
+                  "url": "${{inputs.slack_webhook_url}}",
+                  "body": {
+                    "text": "[WARNING] ${{inputs.title}}: ${{inputs.message}}"
+                  }
+                },
+                "timeout": "15s",
+                "retry": {
+                  "max": 2,
+                  "backoff": "exponential",
+                  "delay": "1s"
+                }
+              },
+              {
+                "id": "emit-warning-sent",
+                "type": "action",
+                "action": "workflow.emit",
+                "depends_on": ["slack-warning"],
+                "params": {
+                  "event": "notification.warning.sent",
+                  "data": {
+                    "title": "${{inputs.title}}",
+                    "channel": "slack"
+                  }
+                }
+              }
+            ],
+            "info": [
+              {
+                "id": "log-info",
+                "type": "action",
+                "action": "workflow.log",
+                "params": {
+                  "message": "[INFO] ${{inputs.title}}: ${{inputs.message}}"
+                }
+              },
+              {
+                "id": "emit-info-logged",
+                "type": "action",
+                "action": "workflow.emit",
+                "depends_on": ["log-info"],
+                "params": {
+                  "event": "notification.info.logged",
+                  "data": {
+                    "title": "${{inputs.title}}"
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    ]
+  }
+}

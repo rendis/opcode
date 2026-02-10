@@ -8,4 +8,14 @@ type Vault interface {
 	Resolve(ctx context.Context, key string) ([]byte, error)
 	Store(ctx context.Context, key string, value []byte) error
 	Delete(ctx context.Context, key string) error
+	List(ctx context.Context) ([]string, error)
+}
+
+// SecretStore is the minimal persistence interface needed by the vault.
+// Satisfied by store.Store.
+type SecretStore interface {
+	StoreSecret(ctx context.Context, key string, value []byte) error
+	GetSecret(ctx context.Context, key string) ([]byte, error)
+	DeleteSecret(ctx context.Context, key string) error
+	ListSecrets(ctx context.Context) ([]string, error)
 }

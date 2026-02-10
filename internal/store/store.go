@@ -29,6 +29,7 @@ type Store interface {
 	// Pending Decisions
 	CreateDecision(ctx context.Context, dec *PendingDecision) error
 	ResolveDecision(ctx context.Context, id string, resolution *Resolution) error
+	CancelDecision(ctx context.Context, id string) error
 	ListPendingDecisions(ctx context.Context, filter DecisionFilter) ([]*PendingDecision, error)
 
 	// Agents
@@ -40,11 +41,25 @@ type Store interface {
 	StoreSecret(ctx context.Context, key string, value []byte) error
 	GetSecret(ctx context.Context, key string) ([]byte, error)
 	DeleteSecret(ctx context.Context, key string) error
+	ListSecrets(ctx context.Context) ([]string, error)
 
 	// Templates
 	StoreTemplate(ctx context.Context, tpl *WorkflowTemplate) error
 	GetTemplate(ctx context.Context, name string, version string) (*WorkflowTemplate, error)
 	ListTemplates(ctx context.Context, filter TemplateFilter) ([]*WorkflowTemplate, error)
+
+	// Plugins
+	CreatePlugin(ctx context.Context, plugin *Plugin) error
+	GetPlugin(ctx context.Context, id string) (*Plugin, error)
+	UpdatePlugin(ctx context.Context, id string, status string, errMsg string) error
+	ListPlugins(ctx context.Context) ([]*Plugin, error)
+
+	// Scheduled Jobs
+	CreateScheduledJob(ctx context.Context, job *ScheduledJob) error
+	GetScheduledJob(ctx context.Context, id string) (*ScheduledJob, error)
+	UpdateScheduledJob(ctx context.Context, id string, update ScheduledJobUpdate) error
+	ListScheduledJobs(ctx context.Context, filter ScheduledJobFilter) ([]*ScheduledJob, error)
+	DeleteScheduledJob(ctx context.Context, id string) error
 
 	// Maintenance
 	Migrate(ctx context.Context) error

@@ -1,0 +1,88 @@
+{
+  "name": "lead-enrichment",
+  "description": "Enrich a lead by fetching company and social data in parallel, then push the combined profile to a CRM.",
+  "category": "sales",
+  "features": ["http"],
+  "input_schema": {
+    "type": "object",
+    "required": ["company_lookup_url", "social_lookup_url", "crm_url", "lead_email"],
+    "properties": {
+      "company_lookup_url": {
+        "type": "string",
+        "description": "API URL for company data lookup (email appended as query param)"
+      },
+      "social_lookup_url": {
+        "type": "string",
+        "description": "API URL for social profile lookup (email appended as query param)"
+      },
+      "crm_url": {
+        "type": "string",
+        "description": "CRM API URL to POST the enriched lead to"
+      },
+      "lead_email": {
+        "type": "string",
+        "description": "Email address of the lead to enrich"
+      }
+    }
+  },
+  "definition": {
+    "timeout": "3m",
+    "on_timeout": "fail",
+    "steps": [
+      {
+        "id": "lookup-company",
+        "type": "action",
+        "action": "http.get",
+        "params": {
+          "url": "${{inputs.company_lookup_url}}",
+          "query": {
+            "email": "${{inputs.lead_email}}"
+          }
+        },
+        "timeout": "30s",
+        "retry": {
+          "max": 2,
+          "backoff": "exponential",
+          "delay": "1s"
+        }
+      },
+      {
+        "id": "lookup-social",
+        "type": "action",
+        "action": "http.get",
+        "params": {
+          "url": "${{inputs.social_lookup_url}}",
+          "query": {
+            "email": "${{inputs.lead_email}}"
+          }
+        },
+        "timeout": "30s",
+        "retry": {
+          "max": 2,
+          "backoff": "exponential",
+          "delay": "1s"
+        }
+      },
+      {
+        "id": "push-to-crm",
+        "type": "action",
+        "action": "http.post",
+        "depends_on": ["lookup-company", "lookup-social"],
+        "params": {
+          "url": "${{inputs.crm_url}}",
+          "body": {
+            "email": "${{inputs.lead_email}}",
+            "company_status": "${{steps.lookup-company.output.status_code}}",
+            "social_status": "${{steps.lookup-social.output.status_code}}"
+          }
+        },
+        "timeout": "30s",
+        "retry": {
+          "max": 3,
+          "backoff": "exponential",
+          "delay": "2s"
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,92 @@
+{
+  "name": "etl-with-validation",
+  "description": "Extract data from a source API, validate status via condition, and load to destination.",
+  "category": "data",
+  "features": ["http", "condition", "retry"],
+  "input_schema": {
+    "type": "object",
+    "required": ["source_url", "destination_url"],
+    "properties": {
+      "source_url": {
+        "type": "string",
+        "description": "URL to fetch source data from"
+      },
+      "destination_url": {
+        "type": "string",
+        "description": "URL to POST transformed data to"
+      }
+    }
+  },
+  "definition": {
+    "timeout": "5m",
+    "on_timeout": "fail",
+    "steps": [
+      {
+        "id": "extract",
+        "type": "action",
+        "action": "http.get",
+        "params": {
+          "url": "${{inputs.source_url}}"
+        },
+        "timeout": "30s",
+        "retry": {
+          "max": 3,
+          "backoff": "exponential",
+          "delay": "1s",
+          "max_delay": "15s"
+        }
+      },
+      {
+        "id": "check-status",
+        "type": "condition",
+        "depends_on": ["extract"],
+        "config": {
+          "expression": "steps['extract'].status_code == 200",
+          "branches": {
+            "true": [
+              {
+                "id": "log-valid",
+                "type": "action",
+                "action": "workflow.log",
+                "params": {
+                  "message": "Source API returned HTTP 200, proceeding to load",
+                  "source": "${{inputs.source_url}}"
+                }
+              },
+              {
+                "id": "load",
+                "type": "action",
+                "action": "http.post",
+                "depends_on": ["log-valid"],
+                "params": {
+                  "url": "${{inputs.destination_url}}",
+                  "body": {
+                    "source": "${{inputs.source_url}}",
+                    "status": "extracted"
+                  }
+                },
+                "timeout": "30s",
+                "retry": {
+                  "max": 2,
+                  "backoff": "exponential",
+                  "delay": "2s"
+                }
+              }
+            ]
+          },
+          "default": [
+            {
+              "id": "log-failure",
+              "type": "action",
+              "action": "workflow.log",
+              "params": {
+                "message": "Source API did not return HTTP 200, aborting ETL",
+                "source": "${{inputs.source_url}}"
+              }
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

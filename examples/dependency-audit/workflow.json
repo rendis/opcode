@@ -1,0 +1,96 @@
+{
+  "name": "dependency-audit",
+  "description": "Scan dependencies for vulnerabilities, triage findings via reasoning, and notify based on decision.",
+  "category": "security",
+  "features": ["shell", "condition", "reasoning", "http"],
+  "input_schema": {
+    "type": "object",
+    "required": ["notification_url"],
+    "properties": {
+      "project_dir": {
+        "type": "string",
+        "description": "Project directory to scan (defaults to current directory)"
+      },
+      "notification_url": {
+        "type": "string",
+        "description": "Webhook URL for vulnerability notifications"
+      }
+    }
+  },
+  "definition": {
+    "timeout": "5m",
+    "on_timeout": "fail",
+    "steps": [
+      {
+        "id": "scan",
+        "type": "action",
+        "action": "shell.exec",
+        "params": {
+          "command": "bash",
+          "args": ["scripts/scan.sh"]
+        },
+        "timeout": "1m"
+      },
+      {
+        "id": "check-vulns",
+        "type": "condition",
+        "depends_on": ["scan"],
+        "config": {
+          "expression": "steps['scan'].stdout.vulnerabilities_found == true",
+          "branches": {
+            "true": [],
+            "false": [
+              {
+                "id": "log-clean",
+                "type": "action",
+                "action": "workflow.log",
+                "params": {
+                  "message": "No vulnerabilities found in dependencies"
+                }
+              }
+            ]
+          }
+        }
+      },
+      {
+        "id": "triage",
+        "type": "reasoning",
+        "depends_on": ["check-vulns"],
+        "config": {
+          "prompt_context": "Vulnerabilities have been found in project dependencies. Review the scan results and decide whether to patch immediately or defer to a scheduled maintenance window.",
+          "options": [
+            { "id": "patch_now", "description": "Patch immediately, critical vulnerabilities present" },
+            { "id": "defer", "description": "Defer to scheduled maintenance, non-critical" }
+          ],
+          "data_inject": {
+            "critical_count": "steps.scan.stdout.critical",
+            "high_count": "steps.scan.stdout.high",
+            "medium_count": "steps.scan.stdout.medium",
+            "packages": "steps.scan.stdout.packages"
+          },
+          "timeout": "1h",
+          "fallback": "patch_now"
+        }
+      },
+      {
+        "id": "notify-vulns",
+        "type": "action",
+        "action": "http.post",
+        "depends_on": ["triage"],
+        "params": {
+          "url": "${{inputs.notification_url}}",
+          "body": {
+            "alert": "dependency-vulnerabilities",
+            "triage_complete": true
+          }
+        },
+        "timeout": "15s",
+        "retry": {
+          "max": 3,
+          "backoff": "exponential",
+          "delay": "1s"
+        }
+      }
+    ]
+  }
+}

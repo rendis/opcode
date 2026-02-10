@@ -1,0 +1,103 @@
+{
+  "name": "git-changelog",
+  "description": "Extract recent git commits, parse for conventional commit types, raise reasoning on breaking changes, and write a CHANGELOG entry.",
+  "category": "devops",
+  "features": ["shell", "condition", "reasoning", "fs"],
+  "input_schema": {
+    "type": "object",
+    "required": ["repo_dir", "changelog_path"],
+    "properties": {
+      "repo_dir": {
+        "type": "string",
+        "description": "Path to the git repository"
+      },
+      "changelog_path": {
+        "type": "string",
+        "description": "Path to the CHANGELOG file to update"
+      }
+    }
+  },
+  "definition": {
+    "timeout": "5m",
+    "on_timeout": "fail",
+    "steps": [
+      {
+        "id": "git-log",
+        "type": "action",
+        "action": "shell.exec",
+        "params": {
+          "command": "git",
+          "args": ["-C", "${{inputs.repo_dir}}", "log", "--oneline", "-20"]
+        },
+        "timeout": "15s"
+      },
+      {
+        "id": "parse-commits",
+        "type": "action",
+        "action": "shell.exec",
+        "depends_on": ["git-log"],
+        "params": {
+          "command": "python3",
+          "args": ["scripts/parse_commits.py"],
+          "stdin": "${{steps.git-log.output.stdout_raw}}"
+        },
+        "timeout": "15s"
+      },
+      {
+        "id": "check-breaking",
+        "type": "condition",
+        "depends_on": ["parse-commits"],
+        "config": {
+          "expression": "steps['parse-commits'].stdout.has_breaking_changes == true",
+          "branches": {
+            "true": [
+              {
+                "id": "release-decision",
+                "type": "reasoning",
+                "config": {
+                  "prompt_context": "Breaking changes have been detected in recent commits. Review the commit summary and decide what type of release version bump is appropriate.",
+                  "options": [
+                    { "id": "major", "description": "Major version bump (breaking changes)" },
+                    { "id": "minor", "description": "Minor version bump (new features, backward-compatible)" },
+                    { "id": "patch", "description": "Patch version bump (bug fixes only)" }
+                  ],
+                  "data_inject": {
+                    "commits": "steps['parse-commits'].stdout.commits",
+                    "features": "steps['parse-commits'].stdout.features",
+                    "fixes": "steps['parse-commits'].stdout.fixes",
+                    "total": "steps['parse-commits'].stdout.total"
+                  },
+                  "timeout": "1h",
+                  "fallback": "major"
+                }
+              }
+            ]
+          },
+          "default": [
+            {
+              "id": "log-no-breaking",
+              "type": "action",
+              "action": "workflow.log",
+              "params": {
+                "message": "No breaking changes detected",
+                "features": "${{steps.parse-commits.output.stdout.features}}",
+                "fixes": "${{steps.parse-commits.output.stdout.fixes}}"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "write-changelog",
+        "type": "action",
+        "action": "fs.append",
+        "depends_on": ["check-breaking"],
+        "params": {
+          "path": "${{inputs.changelog_path}}",
+          "content": "Changelog updated from recent commits"
+        },
+        "timeout": "15s"
+      }
+    ]
+  }
+}

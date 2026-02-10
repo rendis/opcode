@@ -1,0 +1,90 @@
+{
+  "name": "secret-rotation",
+  "description": "Generate a new secret, update the service, verify the response, and log an audit entry.",
+  "category": "security",
+  "features": ["crypto", "http", "assert"],
+  "input_schema": {
+    "type": "object",
+    "required": ["service_url", "service_name"],
+    "properties": {
+      "service_url": {
+        "type": "string",
+        "description": "Service endpoint to update the secret on"
+      },
+      "service_name": {
+        "type": "string",
+        "description": "Name of the service for audit logging"
+      }
+    }
+  },
+  "definition": {
+    "timeout": "5m",
+    "on_timeout": "fail",
+    "on_complete": {
+      "id": "audit-success",
+      "type": "action",
+      "action": "workflow.log",
+      "params": {
+        "message": "Secret rotation completed successfully",
+        "service": "${{inputs.service_name}}",
+        "rotated_at": "now"
+      }
+    },
+    "on_error": {
+      "id": "audit-failure",
+      "type": "action",
+      "action": "workflow.log",
+      "params": {
+        "message": "Secret rotation FAILED",
+        "service": "${{inputs.service_name}}"
+      }
+    },
+    "steps": [
+      {
+        "id": "generate-secret",
+        "type": "action",
+        "action": "crypto.uuid"
+      },
+      {
+        "id": "update-service",
+        "type": "action",
+        "action": "http.post",
+        "depends_on": ["generate-secret"],
+        "params": {
+          "url": "${{inputs.service_url}}",
+          "body": {
+            "action": "rotate_secret",
+            "service": "${{inputs.service_name}}",
+            "new_secret": "${{steps.generate-secret.output.uuid}}"
+          }
+        },
+        "timeout": "30s",
+        "retry": {
+          "max": 3,
+          "backoff": "exponential",
+          "delay": "2s"
+        }
+      },
+      {
+        "id": "verify-update",
+        "type": "action",
+        "action": "assert.equals",
+        "depends_on": ["update-service"],
+        "params": {
+          "actual": "${{steps.update-service.output.status_code}}",
+          "expected": "200"
+        }
+      },
+      {
+        "id": "log-rotation",
+        "type": "action",
+        "action": "workflow.log",
+        "depends_on": ["verify-update"],
+        "params": {
+          "message": "Secret rotated and verified",
+          "service": "${{inputs.service_name}}"
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,74 @@
+{
+  "name": "log-anomaly-triage",
+  "description": "Analyze a log file for anomalies with Python, triage via reasoning, and notify.",
+  "category": "observability",
+  "features": ["shell", "reasoning", "http"],
+  "input_schema": {
+    "type": "object",
+    "required": ["log_path", "notification_url"],
+    "properties": {
+      "log_path": {
+        "type": "string",
+        "description": "Path to the log file to analyze"
+      },
+      "notification_url": {
+        "type": "string",
+        "description": "Webhook URL for anomaly notifications"
+      }
+    }
+  },
+  "definition": {
+    "timeout": "5m",
+    "on_timeout": "fail",
+    "steps": [
+      {
+        "id": "analyze",
+        "type": "action",
+        "action": "shell.exec",
+        "params": {
+          "command": "python3",
+          "args": ["scripts/analyze.py", "${{inputs.log_path}}"]
+        },
+        "timeout": "30s"
+      },
+      {
+        "id": "triage",
+        "type": "reasoning",
+        "depends_on": ["analyze"],
+        "config": {
+          "prompt_context": "Log analysis complete. Review the results and decide whether to escalate for immediate investigation or mark as benign.",
+          "options": [
+            { "id": "escalate", "description": "Escalate for immediate investigation" },
+            { "id": "ignore", "description": "Ignore, known benign pattern" }
+          ],
+          "data_inject": {
+            "anomaly_count": "steps['analyze'].stdout.anomaly_count",
+            "severity": "steps['analyze'].stdout.severity",
+            "details": "steps['analyze'].stdout.details"
+          },
+          "timeout": "1h",
+          "fallback": "escalate"
+        }
+      },
+      {
+        "id": "notify",
+        "type": "action",
+        "action": "http.post",
+        "depends_on": ["triage"],
+        "params": {
+          "url": "${{inputs.notification_url}}",
+          "body": {
+            "alert": "log-anomaly-triage-complete",
+            "log_path": "${{inputs.log_path}}"
+          }
+        },
+        "timeout": "15s",
+        "retry": {
+          "max": 3,
+          "backoff": "exponential",
+          "delay": "1s"
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "name": "iterative-refinement",
+  "description": "Refine a draft through agent feedback. Agent reviews and either approves or provides feedback.",
+  "category": "content",
+  "features": ["reasoning", "crypto", "workflow.log"],
+  "input_schema": {
+    "type": "object",
+    "required": ["draft_content"],
+    "properties": {
+      "draft_content": {
+        "type": "string",
+        "description": "Initial draft content to refine"
+      }
+    }
+  },
+  "definition": {
+    "timeout": "10m",
+    "on_timeout": "suspend",
+    "steps": [
+      {
+        "id": "gen-draft-id",
+        "type": "action",
+        "action": "crypto.uuid"
+      },
+      {
+        "id": "review",
+        "type": "reasoning",
+        "depends_on": ["gen-draft-id"],
+        "config": {
+          "prompt_context": "Review the current draft and provide feedback. If the draft is ready, choose 'approve'. Otherwise, provide free-form feedback describing what needs to change.",
+          "options": [],
+          "data_inject": {
+            "draft_id": "steps['gen-draft-id'].uuid",
+            "draft_content": "inputs.draft_content"
+          },
+          "timeout": "1h",
+          "fallback": "approve"
+        }
+      },
+      {
+        "id": "log-review-complete",
+        "type": "action",
+        "action": "workflow.log",
+        "depends_on": ["review"],
+        "params": {
+          "message": "Draft review completed"
+        }
+      }
+    ]
+  }
+}

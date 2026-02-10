@@ -1,0 +1,96 @@
+{
+  "name": "auto-responder",
+  "description": "Check if an incoming message matches known FAQ keywords; reply with a template or escalate to an agent for a custom response via reasoning.",
+  "category": "communication",
+  "features": ["condition", "crypto", "http", "reasoning"],
+  "input_schema": {
+    "type": "object",
+    "required": ["message", "faq_keywords", "respond_api_url", "sender_id"],
+    "properties": {
+      "message": {
+        "type": "string",
+        "description": "Incoming message text"
+      },
+      "faq_keywords": {
+        "type": "array",
+        "description": "List of keywords that indicate a known FAQ question",
+        "items": { "type": "string" }
+      },
+      "respond_api_url": {
+        "type": "string",
+        "description": "API endpoint to send the response"
+      },
+      "sender_id": {
+        "type": "string",
+        "description": "ID of the message sender"
+      },
+      "template_response": {
+        "type": "string",
+        "description": "Canned response text for FAQ matches"
+      }
+    }
+  },
+  "definition": {
+    "timeout": "5m",
+    "on_timeout": "fail",
+    "steps": [
+      {
+        "id": "hash-message",
+        "type": "action",
+        "action": "crypto.hash",
+        "params": {
+          "algorithm": "sha256",
+          "data": "${{inputs.message}}"
+        }
+      },
+      {
+        "id": "check-faq",
+        "type": "condition",
+        "depends_on": ["hash-message"],
+        "config": {
+          "expression": "inputs.faq_keywords.exists(kw, inputs.message.contains(kw))",
+          "branches": {
+            "true": [
+              {
+                "id": "send-template",
+                "type": "action",
+                "action": "http.post",
+                "params": {
+                  "url": "${{inputs.respond_api_url}}",
+                  "body": {
+                    "sender_id": "${{inputs.sender_id}}",
+                    "response": "${{inputs.template_response}}",
+                    "tracking_hash": "${{steps.hash-message.output.hash}}",
+                    "type": "faq"
+                  }
+                },
+                "timeout": "15s",
+                "retry": {
+                  "max": 2,
+                  "backoff": "exponential",
+                  "delay": "1s"
+                }
+              }
+            ]
+          },
+          "default": [
+            {
+              "id": "draft-response",
+              "type": "reasoning",
+              "config": {
+                "prompt_context": "Draft a helpful, professional response to this incoming message. The message does not match any known FAQ, so a custom reply is needed.",
+                "options": [],
+                "data_inject": {
+                  "message": "inputs.message",
+                  "sender_id": "inputs.sender_id"
+                },
+                "timeout": "1h",
+                "fallback": ""
+              }
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

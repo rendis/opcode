@@ -1,0 +1,72 @@
+{
+  "name": "content-pipeline",
+  "description": "Generate a content ID, get agent review on draft quality, then log the review outcome.",
+  "category": "content",
+  "features": ["crypto", "reasoning", "workflow.log"],
+  "input_schema": {
+    "type": "object",
+    "required": ["content", "publish_api_url", "slack_webhook_url", "email_api_url"],
+    "properties": {
+      "content": {
+        "type": "string",
+        "description": "Draft content to be reviewed and published"
+      },
+      "author": {
+        "type": "string",
+        "description": "Content author name"
+      },
+      "publish_api_url": {
+        "type": "string",
+        "description": "API endpoint to publish the content"
+      },
+      "slack_webhook_url": {
+        "type": "string",
+        "description": "Slack webhook for publish notifications"
+      },
+      "email_api_url": {
+        "type": "string",
+        "description": "Email API for publish notifications"
+      }
+    }
+  },
+  "definition": {
+    "timeout": "5m",
+    "on_timeout": "fail",
+    "steps": [
+      {
+        "id": "generate-id",
+        "type": "action",
+        "action": "crypto.uuid",
+        "params": {}
+      },
+      {
+        "id": "review-content",
+        "type": "reasoning",
+        "depends_on": ["generate-id"],
+        "config": {
+          "prompt_context": "Review this draft content for quality, accuracy, and readability. Decide whether it is ready to publish, needs revision, or should be rejected.",
+          "options": [
+            { "id": "publish", "description": "Content is ready to publish" },
+            { "id": "revise", "description": "Content needs revisions before publishing" },
+            { "id": "reject", "description": "Content is not suitable for publishing" }
+          ],
+          "data_inject": {
+            "content": "inputs.content",
+            "author": "inputs.author"
+          },
+          "timeout": "1h",
+          "fallback": "reject"
+        }
+      },
+      {
+        "id": "log-review-complete",
+        "type": "action",
+        "action": "workflow.log",
+        "depends_on": ["review-content"],
+        "params": {
+          "message": "Content review complete"
+        }
+      }
+    ]
+  }
+}

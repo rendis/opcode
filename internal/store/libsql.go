@@ -532,7 +532,18 @@ func (s *LibSQLStore) ResolveDecision(ctx context.Context, id string, resolution
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE pending_decisions SET resolution = ?, resolved_by = ?, resolved_at = CURRENT_TIMESTAMP, status = 'resolved'
 		 WHERE id = ? AND status = 'pending'`,
-		string(resJSON), resolution.Choice, id,
+		string(resJSON), resolution.ResolvedBy, id,
+	)
+	if err != nil {
+		return err
+	}
+	return checkRowsAffected(res, "pending_decision", id)
+}
+
+func (s *LibSQLStore) CancelDecision(ctx context.Context, id string) error {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE pending_decisions SET status = 'cancelled' WHERE id = ? AND status = 'pending'`,
+		id,
 	)
 	if err != nil {
 		return err
@@ -611,7 +622,7 @@ func (s *LibSQLStore) ListPendingDecisions(ctx context.Context, filter DecisionF
 func (s *LibSQLStore) StoreSecret(ctx context.Context, key string, value []byte) error {
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO secrets (key, value, created_at) VALUES (?, ?, CURRENT_TIMESTAMP)
-		 ON CONFLICT(key) DO UPDATE SET value=excluded.value, rotated_at=CURRENT_TIMESTAMP`,
+		 ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
 		key, value,
 	)
 	return err
@@ -632,6 +643,238 @@ func (s *LibSQLStore) DeleteSecret(ctx context.Context, key string) error {
 		return err
 	}
 	return checkRowsAffected(res, "secret", key)
+}
+
+func (s *LibSQLStore) ListSecrets(ctx context.Context) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT key FROM secrets ORDER BY key`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var keys []string
+	for rows.Next() {
+		var k string
+		if err := rows.Scan(&k); err != nil {
+			return nil, err
+		}
+		keys = append(keys, k)
+	}
+	return keys, rows.Err()
+}
+
+// --- Plugins ---
+
+func (s *LibSQLStore) CreatePlugin(ctx context.Context, plugin *Plugin) error {
+	config, err := nullableJSON(plugin.Config)
+	if err != nil {
+		return fmt.Errorf("marshal plugin config: %w", err)
+	}
+	_, err = s.db.ExecContext(ctx,
+		`INSERT INTO plugins (id, name, type, config, status, last_health_check, error_message, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		plugin.ID, plugin.Name, plugin.Type, config,
+		plugin.Status, nullTime(plugin.LastHealthCheck), nullStr(plugin.ErrorMessage),
+		timeOrNow(plugin.CreatedAt),
+	)
+	return err
+}
+
+func (s *LibSQLStore) GetPlugin(ctx context.Context, id string) (*Plugin, error) {
+	p := &Plugin{}
+	var config string
+	var lastHealthCheck sql.NullTime
+	var errMsg sql.NullString
+	err := s.db.QueryRowContext(ctx,
+		`SELECT id, name, type, config, status, last_health_check, error_message, created_at
+		 FROM plugins WHERE id = ?`, id,
+	).Scan(&p.ID, &p.Name, &p.Type, &config, &p.Status, &lastHealthCheck, &errMsg, &p.CreatedAt)
+	if err == sql.ErrNoRows {
+		return nil, storeNotFound("plugin", id)
+	}
+	if err != nil {
+		return nil, err
+	}
+	p.Config = json.RawMessage(config)
+	p.ErrorMessage = errMsg.String
+	if lastHealthCheck.Valid {
+		p.LastHealthCheck = &lastHealthCheck.Time
+	}
+	return p, nil
+}
+
+func (s *LibSQLStore) UpdatePlugin(ctx context.Context, id string, status string, errMsg string) error {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE plugins SET status = ?, error_message = ?, last_health_check = CURRENT_TIMESTAMP WHERE id = ?`,
+		status, nullStr(errMsg), id,
+	)
+	if err != nil {
+		return err
+	}
+	return checkRowsAffected(res, "plugin", id)
+}
+
+func (s *LibSQLStore) ListPlugins(ctx context.Context) ([]*Plugin, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, name, type, config, status, last_health_check, error_message, created_at FROM plugins ORDER BY created_at DESC`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var plugins []*Plugin
+	for rows.Next() {
+		p := &Plugin{}
+		var config string
+		var lastHealthCheck sql.NullTime
+		var errMsg sql.NullString
+		if err := rows.Scan(&p.ID, &p.Name, &p.Type, &config, &p.Status, &lastHealthCheck, &errMsg, &p.CreatedAt); err != nil {
+			return nil, err
+		}
+		p.Config = json.RawMessage(config)
+		p.ErrorMessage = errMsg.String
+		if lastHealthCheck.Valid {
+			p.LastHealthCheck = &lastHealthCheck.Time
+		}
+		plugins = append(plugins, p)
+	}
+	return plugins, rows.Err()
+}
+
+// --- Scheduled Jobs ---
+
+func (s *LibSQLStore) CreateScheduledJob(ctx context.Context, job *ScheduledJob) error {
+	params := nullRaw(job.Params)
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO scheduled_jobs (id, template_name, template_version, cron_expression, params, agent_id, enabled, last_run_at, next_run_at, last_run_status, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		job.ID, job.TemplateName, nullStr(job.TemplateVersion), job.CronExpression,
+		params, job.AgentID, job.Enabled,
+		nullTime(job.LastRunAt), nullTime(job.NextRunAt), nullStr(job.LastRunStatus),
+		timeOrNow(job.CreatedAt),
+	)
+	return err
+}
+
+func (s *LibSQLStore) GetScheduledJob(ctx context.Context, id string) (*ScheduledJob, error) {
+	j := &ScheduledJob{}
+	var tmplVer, lastRunStatus sql.NullString
+	var params sql.NullString
+	var lastRunAt, nextRunAt sql.NullTime
+	err := s.db.QueryRowContext(ctx,
+		`SELECT id, template_name, template_version, cron_expression, params, agent_id, enabled, last_run_at, next_run_at, last_run_status, created_at
+		 FROM scheduled_jobs WHERE id = ?`, id,
+	).Scan(&j.ID, &j.TemplateName, &tmplVer, &j.CronExpression, &params,
+		&j.AgentID, &j.Enabled, &lastRunAt, &nextRunAt, &lastRunStatus, &j.CreatedAt)
+	if err == sql.ErrNoRows {
+		return nil, storeNotFound("scheduled_job", id)
+	}
+	if err != nil {
+		return nil, err
+	}
+	j.TemplateVersion = tmplVer.String
+	j.Params = rawOrNil(params)
+	j.LastRunStatus = lastRunStatus.String
+	if lastRunAt.Valid {
+		j.LastRunAt = &lastRunAt.Time
+	}
+	if nextRunAt.Valid {
+		j.NextRunAt = &nextRunAt.Time
+	}
+	return j, nil
+}
+
+func (s *LibSQLStore) UpdateScheduledJob(ctx context.Context, id string, update ScheduledJobUpdate) error {
+	var sets []string
+	var args []any
+
+	if update.Enabled != nil {
+		sets = append(sets, "enabled = ?")
+		args = append(args, *update.Enabled)
+	}
+	if update.LastRunAt != nil {
+		sets = append(sets, "last_run_at = ?")
+		args = append(args, *update.LastRunAt)
+	}
+	if update.NextRunAt != nil {
+		sets = append(sets, "next_run_at = ?")
+		args = append(args, *update.NextRunAt)
+	}
+	if update.LastRunStatus != "" {
+		sets = append(sets, "last_run_status = ?")
+		args = append(args, update.LastRunStatus)
+	}
+	if len(sets) == 0 {
+		return nil
+	}
+	args = append(args, id)
+
+	query := fmt.Sprintf("UPDATE scheduled_jobs SET %s WHERE id = ?", strings.Join(sets, ", "))
+	res, err := s.db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return err
+	}
+	return checkRowsAffected(res, "scheduled_job", id)
+}
+
+func (s *LibSQLStore) ListScheduledJobs(ctx context.Context, filter ScheduledJobFilter) ([]*ScheduledJob, error) {
+	var where []string
+	var args []any
+
+	if filter.Enabled != nil {
+		where = append(where, "enabled = ?")
+		args = append(args, *filter.Enabled)
+	}
+	if filter.AgentID != "" {
+		where = append(where, "agent_id = ?")
+		args = append(args, filter.AgentID)
+	}
+
+	query := `SELECT id, template_name, template_version, cron_expression, params, agent_id, enabled, last_run_at, next_run_at, last_run_status, created_at FROM scheduled_jobs`
+	if len(where) > 0 {
+		query += " WHERE " + strings.Join(where, " AND ")
+	}
+	query += " ORDER BY created_at DESC"
+	if filter.Limit > 0 {
+		query += fmt.Sprintf(" LIMIT %d", filter.Limit)
+	}
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var jobs []*ScheduledJob
+	for rows.Next() {
+		j := &ScheduledJob{}
+		var tmplVer, lastRunStatus sql.NullString
+		var params sql.NullString
+		var lastRunAt, nextRunAt sql.NullTime
+		if err := rows.Scan(&j.ID, &j.TemplateName, &tmplVer, &j.CronExpression, &params,
+			&j.AgentID, &j.Enabled, &lastRunAt, &nextRunAt, &lastRunStatus, &j.CreatedAt); err != nil {
+			return nil, err
+		}
+		j.TemplateVersion = tmplVer.String
+		j.Params = rawOrNil(params)
+		j.LastRunStatus = lastRunStatus.String
+		if lastRunAt.Valid {
+			j.LastRunAt = &lastRunAt.Time
+		}
+		if nextRunAt.Valid {
+			j.NextRunAt = &nextRunAt.Time
+		}
+		jobs = append(jobs, j)
+	}
+	return jobs, rows.Err()
+}
+
+func (s *LibSQLStore) DeleteScheduledJob(ctx context.Context, id string) error {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM scheduled_jobs WHERE id = ?`, id)
+	if err != nil {
+		return err
+	}
+	return checkRowsAffected(res, "scheduled_job", id)
 }
 
 // --- Templates ---

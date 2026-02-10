@@ -1,0 +1,121 @@
+{
+  "name": "openclaw-version-checker",
+  "description": "Check for new versions of a remote repository by comparing git tags, install updates if available, and send a notification.",
+  "category": "devops",
+  "features": ["shell", "condition", "http", "workflow.log"],
+  "input_schema": {
+    "type": "object",
+    "required": ["repo_url", "current_version", "install_dir"],
+    "properties": {
+      "repo_url": {
+        "type": "string",
+        "description": "Git repository URL to check for new tags"
+      },
+      "current_version": {
+        "type": "string",
+        "description": "Currently installed version (e.g. 'v1.2.3')"
+      },
+      "install_dir": {
+        "type": "string",
+        "description": "Directory where the tool is installed"
+      },
+      "notification_url": {
+        "type": "string",
+        "description": "Webhook URL for update notifications (optional)"
+      }
+    }
+  },
+  "definition": {
+    "timeout": "10m",
+    "on_timeout": "fail",
+    "steps": [
+      {
+        "id": "fetch-tags",
+        "type": "action",
+        "action": "shell.exec",
+        "params": {
+          "command": "git",
+          "args": ["ls-remote", "--tags", "${{inputs.repo_url}}"]
+        },
+        "timeout": "30s"
+      },
+      {
+        "id": "check-version",
+        "type": "action",
+        "action": "shell.exec",
+        "depends_on": ["fetch-tags"],
+        "params": {
+          "command": "bash",
+          "args": ["scripts/check_version.sh", "${{inputs.current_version}}"],
+          "stdin": "${{steps.fetch-tags.output.stdout_raw}}"
+        },
+        "timeout": "15s"
+      },
+      {
+        "id": "route-update",
+        "type": "condition",
+        "depends_on": ["check-version"],
+        "config": {
+          "expression": "steps['check-version'].stdout.update_available == true",
+          "branches": {
+            "true": [
+              {
+                "id": "install-update",
+                "type": "action",
+                "action": "shell.exec",
+                "params": {
+                  "command": "bash",
+                  "args": ["-c", "git -C \"$1\" fetch --tags && git -C \"$1\" checkout \"$2\"", "--", "${{inputs.install_dir}}", "${{steps.check-version.output.stdout.tag_ref}}"]
+                },
+                "timeout": "60s"
+              },
+              {
+                "id": "log-updated",
+                "type": "action",
+                "action": "workflow.log",
+                "depends_on": ["install-update"],
+                "params": {
+                  "message": "Updated to new version",
+                  "previous_version": "${{inputs.current_version}}",
+                  "new_version": "${{steps.check-version.output.stdout.latest_version}}"
+                }
+              },
+              {
+                "id": "notify-update",
+                "type": "action",
+                "action": "http.post",
+                "depends_on": ["log-updated"],
+                "condition": "inputs.notification_url != ''",
+                "params": {
+                  "url": "${{inputs.notification_url}}",
+                  "body": {
+                    "event": "version_updated",
+                    "previous_version": "${{inputs.current_version}}",
+                    "new_version": "${{steps.check-version.output.stdout.latest_version}}"
+                  }
+                },
+                "timeout": "15s",
+                "retry": {
+                  "max": 2,
+                  "backoff": "linear",
+                  "delay": "2s"
+                }
+              }
+            ]
+          },
+          "default": [
+            {
+              "id": "log-up-to-date",
+              "type": "action",
+              "action": "workflow.log",
+              "params": {
+                "message": "Already up to date",
+                "current_version": "${{inputs.current_version}}"
+              }
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

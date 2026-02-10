@@ -1,0 +1,68 @@
+{
+  "name": "onboarding-checklist",
+  "description": "Loop through onboarding checklist items, verify each via shell script, and escalate failures to an agent for decision.",
+  "category": "operations",
+  "features": ["loop", "shell", "reasoning"],
+  "input_schema": {
+    "type": "object",
+    "required": ["checklist_items"],
+    "properties": {
+      "checklist_items": {
+        "type": "array",
+        "description": "Array of checklist item names to verify (e.g. [\"vpn-access\", \"email-setup\", \"repo-permissions\"])",
+        "items": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "definition": {
+    "timeout": "30m",
+    "on_timeout": "suspend",
+    "steps": [
+      {
+        "id": "verify-items",
+        "type": "loop",
+        "config": {
+          "mode": "for_each",
+          "over": "inputs.checklist_items",
+          "max_iter": 30,
+          "body": [
+            {
+              "id": "verify",
+              "type": "action",
+              "action": "shell.exec",
+              "params": {
+                "command": "bash",
+                "args": ["scripts/verify.sh", "${{loop.item}}"]
+              },
+              "timeout": "30s",
+              "on_error": {
+                "strategy": "ignore"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "review-results",
+        "type": "reasoning",
+        "depends_on": ["verify-items"],
+        "config": {
+          "prompt_context": "Review the onboarding verification results for all checklist items. Some items may have failed verification. Decide how to proceed with the onboarding process.",
+          "options": [
+            { "id": "approve", "description": "All critical items passed — approve onboarding" },
+            { "id": "retry-failed", "description": "Retry the failed items — transient failures likely" },
+            { "id": "block", "description": "Block onboarding — required items failed verification" }
+          ],
+          "data_inject": {
+            "checklist_items": "inputs.checklist_items",
+            "verification_results": "steps.verify-items.output"
+          },
+          "timeout": "5m",
+          "fallback": "block"
+        }
+      }
+    ]
+  }
+}

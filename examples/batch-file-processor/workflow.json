@@ -1,0 +1,66 @@
+{
+  "name": "batch-file-processor",
+  "description": "List files in a directory, loop over each to read and hash, then log results.",
+  "category": "data",
+  "features": ["fs", "loop", "crypto", "workflow.log"],
+  "input_schema": {
+    "type": "object",
+    "required": ["input_dir", "output_dir"],
+    "properties": {
+      "input_dir": {
+        "type": "string",
+        "description": "Directory containing files to process"
+      },
+      "output_dir": {
+        "type": "string",
+        "description": "Directory to write processed files to"
+      }
+    }
+  },
+  "definition": {
+    "timeout": "10m",
+    "on_timeout": "fail",
+    "steps": [
+      {
+        "id": "list-files",
+        "type": "action",
+        "action": "fs.list",
+        "params": {
+          "path": "${{inputs.input_dir}}"
+        },
+        "timeout": "15s"
+      },
+      {
+        "id": "process-each",
+        "type": "loop",
+        "depends_on": ["list-files"],
+        "config": {
+          "mode": "for_each",
+          "over": "steps['list-files'].entries",
+          "max_iter": 100,
+          "body": [
+            {
+              "id": "hash-file",
+              "type": "action",
+              "action": "crypto.hash",
+              "params": {
+                "algorithm": "sha256",
+                "data": "${{loop.item.name}}"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "log-complete",
+        "type": "action",
+        "action": "workflow.log",
+        "depends_on": ["process-each"],
+        "params": {
+          "message": "Batch file processing complete",
+          "output_dir": "${{inputs.output_dir}}"
+        }
+      }
+    ]
+  }
+}

@@ -287,7 +287,7 @@ func TestCancelWorkflow_CascadeSkipsNonTerminal(t *testing.T) {
 
 	stepStates := map[string]schema.StepStatus{
 		"s1": schema.StepStatusCompleted, // terminal — should not be touched
-		"s2": schema.StepStatusRunning,   // running can't skip directly; skip should be skipped
+		"s2": schema.StepStatusRunning,   // non-terminal, can skip (cancelled decision)
 		"s3": schema.StepStatusPending,   // non-terminal, can skip
 		"s4": schema.StepStatusScheduled, // non-terminal, can skip
 		"s5": schema.StepStatusSuspended, // non-terminal, can skip
@@ -297,21 +297,19 @@ func TestCancelWorkflow_CascadeSkipsNonTerminal(t *testing.T) {
 	require.NoError(t, err)
 
 	events := app.Events()
-	// Expect: workflow_cancelled + skip events for s3, s4, s5
-	// s2 (running) cannot transition directly to skipped per the table, so it's skipped.
 	var eventTypes []string
 	for _, e := range events {
 		eventTypes = append(eventTypes, e.Type)
 	}
 	assert.Contains(t, eventTypes, schema.EventWorkflowCancelled)
-	// s3 (pending -> skipped), s4 (scheduled -> skipped), s5 (suspended -> skipped)
+	// s2 (running -> skipped), s3 (pending -> skipped), s4 (scheduled -> skipped), s5 (suspended -> skipped)
 	skipCount := 0
 	for _, e := range events {
 		if e.Type == schema.EventStepSkipped {
 			skipCount++
 		}
 	}
-	assert.Equal(t, 3, skipCount, "should skip s3, s4, s5 (not s1/completed, not s2/running)")
+	assert.Equal(t, 4, skipCount, "should skip s2, s3, s4, s5 (not s1/completed)")
 }
 
 func TestCancelWorkflow_FromSuspended(t *testing.T) {

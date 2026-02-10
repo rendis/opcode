@@ -1,0 +1,70 @@
+{
+  "name": "approval-chain",
+  "description": "Sequential two-reviewer approval chain with timeout and fallback to reject.",
+  "category": "governance",
+  "features": ["reasoning", "workflow.log"],
+  "input_schema": {
+    "type": "object",
+    "required": ["request_id", "request_summary"],
+    "properties": {
+      "request_id": {
+        "type": "string",
+        "description": "ID of the request requiring approval"
+      },
+      "request_summary": {
+        "type": "string",
+        "description": "Human-readable summary of what is being approved"
+      }
+    }
+  },
+  "definition": {
+    "timeout": "3h",
+    "on_timeout": "fail",
+    "steps": [
+      {
+        "id": "reviewer1",
+        "type": "reasoning",
+        "config": {
+          "prompt_context": "You are the first reviewer. Evaluate this request and decide whether to approve or reject it.",
+          "options": [
+            { "id": "approve", "description": "Approve the request and forward to second reviewer" },
+            { "id": "reject", "description": "Reject the request" }
+          ],
+          "data_inject": {
+            "request_id": "inputs.request_id",
+            "request_summary": "inputs.request_summary"
+          },
+          "timeout": "1h",
+          "fallback": "reject"
+        }
+      },
+      {
+        "id": "reviewer2",
+        "type": "reasoning",
+        "depends_on": ["reviewer1"],
+        "config": {
+          "prompt_context": "You are the second reviewer. The first reviewer has approved this request. Provide your final decision.",
+          "options": [
+            { "id": "approve", "description": "Grant final approval" },
+            { "id": "reject", "description": "Reject the request" }
+          ],
+          "data_inject": {
+            "request_id": "inputs.request_id",
+            "request_summary": "inputs.request_summary"
+          },
+          "timeout": "1h",
+          "fallback": "reject"
+        }
+      },
+      {
+        "id": "log-completed",
+        "type": "action",
+        "action": "workflow.log",
+        "depends_on": ["reviewer2"],
+        "params": {
+          "message": "Request ${{inputs.request_id}} reviewed by both reviewers"
+        }
+      }
+    ]
+  }
+}

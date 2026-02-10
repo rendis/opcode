@@ -293,7 +293,7 @@ var ValidWorkflowTransitions = map[schema.WorkflowStatus][]schema.WorkflowStatus
 var ValidStepTransitions = map[schema.StepStatus][]schema.StepStatus{
 	schema.StepStatusPending:   {schema.StepStatusScheduled, schema.StepStatusSkipped},
 	schema.StepStatusScheduled: {schema.StepStatusRunning, schema.StepStatusSkipped, schema.StepStatusSuspended},
-	schema.StepStatusRunning:   {schema.StepStatusCompleted, schema.StepStatusFailed, schema.StepStatusSuspended, schema.StepStatusRetrying},
+	schema.StepStatusRunning:   {schema.StepStatusCompleted, schema.StepStatusFailed, schema.StepStatusSuspended, schema.StepStatusRetrying, schema.StepStatusSkipped},
 	schema.StepStatusRetrying:  {schema.StepStatusRunning, schema.StepStatusFailed},
 	schema.StepStatusSuspended: {schema.StepStatusRunning, schema.StepStatusFailed, schema.StepStatusSkipped},
 	schema.StepStatusCompleted: {},

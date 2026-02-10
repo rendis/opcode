@@ -1,0 +1,122 @@
+{
+  "name": "report-generator",
+  "description": "Fetch data from three sources in parallel, log the merge, write to file, and distribute via email API.",
+  "category": "reporting",
+  "features": ["http", "fs", "workflow.log"],
+  "input_schema": {
+    "type": "object",
+    "required": ["sales_api_url", "users_api_url", "metrics_api_url", "report_path", "email_api_url"],
+    "properties": {
+      "sales_api_url": {
+        "type": "string",
+        "description": "API endpoint for sales data"
+      },
+      "users_api_url": {
+        "type": "string",
+        "description": "API endpoint for user data"
+      },
+      "metrics_api_url": {
+        "type": "string",
+        "description": "API endpoint for system metrics"
+      },
+      "report_path": {
+        "type": "string",
+        "description": "File path to write the generated report"
+      },
+      "email_api_url": {
+        "type": "string",
+        "description": "API endpoint for sending email distribution"
+      }
+    }
+  },
+  "definition": {
+    "timeout": "10m",
+    "on_timeout": "fail",
+    "steps": [
+      {
+        "id": "fetch-sales",
+        "type": "action",
+        "action": "http.get",
+        "params": {
+          "url": "${{inputs.sales_api_url}}"
+        },
+        "timeout": "30s",
+        "retry": {
+          "max": 2,
+          "backoff": "exponential",
+          "delay": "1s"
+        }
+      },
+      {
+        "id": "fetch-users",
+        "type": "action",
+        "action": "http.get",
+        "params": {
+          "url": "${{inputs.users_api_url}}"
+        },
+        "timeout": "30s",
+        "retry": {
+          "max": 2,
+          "backoff": "exponential",
+          "delay": "1s"
+        }
+      },
+      {
+        "id": "fetch-metrics",
+        "type": "action",
+        "action": "http.get",
+        "params": {
+          "url": "${{inputs.metrics_api_url}}"
+        },
+        "timeout": "30s",
+        "retry": {
+          "max": 2,
+          "backoff": "exponential",
+          "delay": "1s"
+        }
+      },
+      {
+        "id": "log-merge",
+        "type": "action",
+        "action": "workflow.log",
+        "depends_on": ["fetch-sales", "fetch-users", "fetch-metrics"],
+        "params": {
+          "message": "All data sources fetched. Compiling report.",
+          "sales_status": "${{steps.fetch-sales.output.status_code}}",
+          "users_status": "${{steps.fetch-users.output.status_code}}",
+          "metrics_status": "${{steps.fetch-metrics.output.status_code}}"
+        }
+      },
+      {
+        "id": "write-report",
+        "type": "action",
+        "action": "fs.write",
+        "depends_on": ["log-merge"],
+        "params": {
+          "path": "${{inputs.report_path}}",
+          "content": "Report generated successfully"
+        },
+        "timeout": "15s"
+      },
+      {
+        "id": "distribute-report",
+        "type": "action",
+        "action": "http.post",
+        "depends_on": ["write-report"],
+        "params": {
+          "url": "${{inputs.email_api_url}}",
+          "body": {
+            "subject": "Generated Report",
+            "report_path": "${{inputs.report_path}}"
+          }
+        },
+        "timeout": "30s",
+        "retry": {
+          "max": 2,
+          "backoff": "linear",
+          "delay": "2s"
+        }
+      }
+    ]
+  }
+}

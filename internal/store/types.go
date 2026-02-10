@@ -84,9 +84,10 @@ type PendingDecision struct {
 
 // Resolution is the agent's response to a pending decision.
 type Resolution struct {
-	Choice    string         `json:"choice"`
-	Reasoning string         `json:"reasoning,omitempty"`
-	Data      map[string]any `json:"data,omitempty"`
+	Choice     string         `json:"choice"`
+	Reasoning  string         `json:"reasoning,omitempty"`
+	Data       map[string]any `json:"data,omitempty"`
+	ResolvedBy string         `json:"resolved_by,omitempty"`
 }
 
 // Agent represents a registered agent identity.
@@ -128,11 +129,9 @@ type Plugin struct {
 
 // Secret is an encrypted key-value entry.
 type Secret struct {
-	Key       string     `json:"key"`
-	Value     []byte     `json:"-"` // encrypted, never serialized
-	CreatedAt time.Time  `json:"created_at"`
-	RotatedAt *time.Time `json:"rotated_at,omitempty"`
-	ExpiresAt *time.Time `json:"expires_at,omitempty"`
+	Key       string    `json:"key"`
+	Value     []byte    `json:"-"` // encrypted, never serialized
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // ScheduledJob is a cron-triggered workflow execution.
@@ -202,6 +201,21 @@ type DecisionFilter struct {
 // TemplateFilter specifies criteria for listing templates.
 type TemplateFilter struct {
 	Name    string `json:"name,omitempty"`
+	AgentID string `json:"agent_id,omitempty"`
+	Limit   int    `json:"limit,omitempty"`
+}
+
+// ScheduledJobUpdate specifies mutable fields of a scheduled job.
+type ScheduledJobUpdate struct {
+	Enabled       *bool      `json:"enabled,omitempty"`
+	LastRunAt     *time.Time `json:"last_run_at,omitempty"`
+	NextRunAt     *time.Time `json:"next_run_at,omitempty"`
+	LastRunStatus string     `json:"last_run_status,omitempty"`
+}
+
+// ScheduledJobFilter specifies criteria for listing scheduled jobs.
+type ScheduledJobFilter struct {
+	Enabled *bool  `json:"enabled,omitempty"`
 	AgentID string `json:"agent_id,omitempty"`
 	Limit   int    `json:"limit,omitempty"`
 }

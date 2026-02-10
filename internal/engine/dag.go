@@ -234,9 +234,7 @@ func validateStepConfig(step *schema.StepDefinition) error {
 		if err := json.Unmarshal(step.Config, &cfg); err != nil {
 			return schema.NewErrorf(schema.ErrCodeValidation, "reasoning step %s has invalid config: %v", step.ID, err)
 		}
-		if len(cfg.Options) == 0 {
-			return schema.NewErrorf(schema.ErrCodeValidation, "reasoning step %s has no options", step.ID)
-		}
+		// Options can be empty for free-form reasoning.
 
 	case schema.StepTypeWait:
 		if len(step.Config) == 0 {

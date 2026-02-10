@@ -1,0 +1,105 @@
+{
+  "name": "repo-health-check",
+  "description": "Run git status, tests, and vet in parallel, then raise reasoning if any checks fail.",
+  "category": "devops",
+  "features": ["shell", "condition", "reasoning", "workflow.log"],
+  "input_schema": {
+    "type": "object",
+    "required": ["repo_dir"],
+    "properties": {
+      "repo_dir": {
+        "type": "string",
+        "description": "Path to the repository to check"
+      }
+    }
+  },
+  "definition": {
+    "timeout": "10m",
+    "on_timeout": "fail",
+    "steps": [
+      {
+        "id": "check-clean",
+        "type": "action",
+        "action": "shell.exec",
+        "params": {
+          "command": "git",
+          "args": ["-C", "${{inputs.repo_dir}}", "status", "--porcelain"]
+        },
+        "timeout": "15s",
+        "on_error": {
+          "strategy": "ignore"
+        }
+      },
+      {
+        "id": "run-tests",
+        "type": "action",
+        "action": "shell.exec",
+        "params": {
+          "command": "go",
+          "args": ["test", "-C", "${{inputs.repo_dir}}", "./...", "-count=1", "-timeout", "120s"]
+        },
+        "timeout": "180s",
+        "on_error": {
+          "strategy": "ignore"
+        }
+      },
+      {
+        "id": "run-vet",
+        "type": "action",
+        "action": "shell.exec",
+        "params": {
+          "command": "go",
+          "args": ["vet", "-C", "${{inputs.repo_dir}}", "./..."]
+        },
+        "timeout": "60s",
+        "on_error": {
+          "strategy": "ignore"
+        }
+      },
+      {
+        "id": "evaluate-results",
+        "type": "condition",
+        "depends_on": ["check-clean", "run-tests", "run-vet"],
+        "config": {
+          "expression": "steps['check-clean'].exit_code == 0 && steps['run-tests'].exit_code == 0 && steps['run-vet'].exit_code == 0",
+          "branches": {
+            "true": [
+              {
+                "id": "log-healthy",
+                "type": "action",
+                "action": "workflow.log",
+                "params": {
+                  "message": "Repository health check passed: clean tree, tests pass, vet clean"
+                }
+              }
+            ]
+          },
+          "default": [
+            {
+              "id": "issue-decision",
+              "type": "reasoning",
+              "config": {
+                "prompt_context": "The repository health check found issues. Review the results from git status, test output, and vet output to decide on next steps.",
+                "options": [
+                  { "id": "investigate", "description": "Investigate and fix the issues now" },
+                  { "id": "defer", "description": "Defer fixes to a later time" },
+                  { "id": "ignore", "description": "Ignore these issues as non-critical" }
+                ],
+                "data_inject": {
+                  "git_status_exit": "steps['check-clean'].exit_code",
+                  "git_status_output": "steps['check-clean'].stdout_raw",
+                  "test_exit": "steps['run-tests'].exit_code",
+                  "test_output": "steps['run-tests'].stderr",
+                  "vet_exit": "steps['run-vet'].exit_code",
+                  "vet_output": "steps['run-vet'].stderr"
+                },
+                "timeout": "1h",
+                "fallback": "investigate"
+              }
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

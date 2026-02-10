@@ -1,0 +1,94 @@
+{
+  "name": "deploy-gate",
+  "description": "Run tests, gate deployment on test results and agent approval, then trigger deploy webhook.",
+  "category": "devops",
+  "features": ["shell", "condition", "reasoning", "http"],
+  "input_schema": {
+    "type": "object",
+    "required": ["deploy_webhook_url"],
+    "properties": {
+      "deploy_webhook_url": {
+        "type": "string",
+        "description": "Webhook URL to trigger deployment"
+      },
+      "deploy_environment": {
+        "type": "string",
+        "description": "Target environment (e.g., staging, production)"
+      }
+    }
+  },
+  "definition": {
+    "timeout": "10m",
+    "on_timeout": "fail",
+    "steps": [
+      {
+        "id": "run-tests",
+        "type": "action",
+        "action": "shell.exec",
+        "params": {
+          "command": "bash",
+          "args": ["scripts/run-tests.sh"]
+        },
+        "timeout": "2m"
+      },
+      {
+        "id": "check-tests",
+        "type": "condition",
+        "depends_on": ["run-tests"],
+        "config": {
+          "expression": "steps['run-tests'].exit_code == 0",
+          "branches": {
+            "false": [
+              {
+                "id": "log-failed",
+                "type": "action",
+                "action": "workflow.log",
+                "params": {
+                  "message": "Tests failed, deployment blocked"
+                }
+              }
+            ]
+          }
+        }
+      },
+      {
+        "id": "approve-deploy",
+        "type": "reasoning",
+        "depends_on": ["check-tests"],
+        "config": {
+          "prompt_context": "All tests passed. Review the test results and decide whether to approve deployment to the target environment.",
+          "options": [
+            { "id": "approve", "description": "Tests look good, approve deployment" },
+            { "id": "reject", "description": "Hold deployment, needs investigation" }
+          ],
+          "data_inject": {
+            "test_results": "steps['run-tests'].stdout",
+            "environment": "inputs.deploy_environment"
+          },
+          "timeout": "1h",
+          "fallback": "reject"
+        }
+      },
+      {
+        "id": "deploy",
+        "type": "action",
+        "action": "http.post",
+        "depends_on": ["approve-deploy"],
+        "params": {
+          "url": "${{inputs.deploy_webhook_url}}",
+          "body": {
+            "action": "deploy",
+            "environment": "${{inputs.deploy_environment}}",
+            "tests_passed": true
+          }
+        },
+        "timeout": "30s",
+        "retry": {
+          "max": 2,
+          "backoff": "exponential",
+          "delay": "2s"
+        }
+      }
+    ]
+  }
+}

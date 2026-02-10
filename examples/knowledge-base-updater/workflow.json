@@ -1,0 +1,103 @@
+{
+  "name": "knowledge-base-updater",
+  "description": "Fetch source content, hash for change detection, and conditionally update a knowledge base file after agent relevance review.",
+  "category": "content",
+  "features": ["http", "crypto", "condition", "reasoning", "fs"],
+  "input_schema": {
+    "type": "object",
+    "required": ["source_url", "last_hash", "kb_path"],
+    "properties": {
+      "source_url": {
+        "type": "string",
+        "description": "URL to fetch the source content from"
+      },
+      "last_hash": {
+        "type": "string",
+        "description": "SHA-256 hash of the last known content version"
+      },
+      "kb_path": {
+        "type": "string",
+        "description": "File path to the knowledge base file to append to"
+      }
+    }
+  },
+  "definition": {
+    "timeout": "10m",
+    "on_timeout": "fail",
+    "steps": [
+      {
+        "id": "fetch-source",
+        "type": "action",
+        "action": "http.get",
+        "params": {
+          "url": "${{inputs.source_url}}"
+        },
+        "timeout": "30s",
+        "retry": {
+          "max": 2,
+          "backoff": "exponential",
+          "delay": "1s"
+        }
+      },
+      {
+        "id": "hash-content",
+        "type": "action",
+        "action": "crypto.hash",
+        "depends_on": ["fetch-source"],
+        "params": {
+          "algorithm": "sha256",
+          "data": "${{steps.fetch-source.output.status}}"
+        }
+      },
+      {
+        "id": "check-changed",
+        "type": "condition",
+        "depends_on": ["hash-content"],
+        "config": {
+          "expression": "steps['hash-content'].hash != inputs.last_hash",
+          "branches": {
+            "true": [
+              {
+                "id": "review-relevance",
+                "type": "reasoning",
+                "config": {
+                  "prompt_context": "New content has been detected from the source. Review it and determine if it is relevant to our knowledge base.",
+                  "options": [
+                    { "id": "relevant", "description": "Content is relevant — append to knowledge base" },
+                    { "id": "not-relevant", "description": "Content is not relevant — skip update" }
+                  ],
+                  "data_inject": {
+                    "source_url": "inputs.source_url",
+                    "content_hash": "steps.hash-content.output.hash"
+                  },
+                  "timeout": "5m",
+                  "fallback": "not-relevant"
+                }
+              },
+              {
+                "id": "append-kb",
+                "type": "action",
+                "action": "fs.append",
+                "depends_on": ["review-relevance"],
+                "params": {
+                  "path": "${{inputs.kb_path}}",
+                  "content": "Updated from source"
+                }
+              }
+            ]
+          },
+          "default": [
+            {
+              "id": "log-no-change",
+              "type": "action",
+              "action": "workflow.log",
+              "params": {
+                "message": "Content hash unchanged — no update needed"
+              }
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,156 @@
+{
+  "name": "order-processing",
+  "description": "Check stock, process payment if available, and notify fulfillment or out-of-stock.",
+  "category": "commerce",
+  "features": ["condition", "http", "retry"],
+  "input_schema": {
+    "type": "object",
+    "required": ["order", "stock_api_url", "payment_api_url", "fulfillment_api_url", "notification_api_url"],
+    "properties": {
+      "order": {
+        "type": "object",
+        "description": "Order data with id, product, quantity, and price",
+        "properties": {
+          "id": { "type": "string" },
+          "product": { "type": "string" },
+          "quantity": { "type": "number" },
+          "price": { "type": "number" }
+        },
+        "required": ["id", "product", "quantity", "price"]
+      },
+      "stock_api_url": {
+        "type": "string",
+        "description": "API endpoint to check product stock"
+      },
+      "payment_api_url": {
+        "type": "string",
+        "description": "API endpoint to process payment"
+      },
+      "fulfillment_api_url": {
+        "type": "string",
+        "description": "API endpoint to notify fulfillment"
+      },
+      "notification_api_url": {
+        "type": "string",
+        "description": "API endpoint for customer notifications"
+      }
+    }
+  },
+  "definition": {
+    "timeout": "5m",
+    "on_timeout": "fail",
+    "steps": [
+      {
+        "id": "check-stock",
+        "type": "action",
+        "action": "http.get",
+        "params": {
+          "url": "${{inputs.stock_api_url}}",
+          "headers": {
+            "X-Product": "${{inputs.order.product}}",
+            "X-Quantity": "${{inputs.order.quantity}}"
+          }
+        },
+        "timeout": "15s",
+        "retry": {
+          "max": 2,
+          "backoff": "exponential",
+          "delay": "1s"
+        }
+      },
+      {
+        "id": "stock-decision",
+        "type": "condition",
+        "depends_on": ["check-stock"],
+        "config": {
+          "expression": "steps['check-stock'].body.available == true",
+          "branches": {
+            "true": [
+              {
+                "id": "process-payment",
+                "type": "action",
+                "action": "http.post",
+                "params": {
+                  "url": "${{inputs.payment_api_url}}",
+                  "body": {
+                    "order_id": "${{inputs.order.id}}",
+                    "product": "${{inputs.order.product}}",
+                    "quantity": "${{inputs.order.quantity}}",
+                    "price": "${{inputs.order.price}}"
+                  }
+                },
+                "timeout": "30s",
+                "retry": {
+                  "max": 2,
+                  "backoff": "exponential",
+                  "delay": "2s"
+                }
+              },
+              {
+                "id": "notify-fulfillment",
+                "type": "action",
+                "action": "http.post",
+                "depends_on": ["process-payment"],
+                "params": {
+                  "url": "${{inputs.fulfillment_api_url}}",
+                  "body": {
+                    "order_id": "${{inputs.order.id}}",
+                    "product": "${{inputs.order.product}}",
+                    "quantity": "${{inputs.order.quantity}}"
+                  }
+                },
+                "timeout": "15s",
+                "retry": {
+                  "max": 2,
+                  "backoff": "exponential",
+                  "delay": "1s"
+                }
+              },
+              {
+                "id": "send-confirmation",
+                "type": "action",
+                "action": "http.post",
+                "depends_on": ["notify-fulfillment"],
+                "params": {
+                  "url": "${{inputs.notification_api_url}}",
+                  "body": {
+                    "order_id": "${{inputs.order.id}}",
+                    "subject": "Order Confirmed",
+                    "message": "Your order has been confirmed and sent to fulfillment."
+                  }
+                },
+                "timeout": "15s",
+                "retry": {
+                  "max": 2,
+                  "backoff": "exponential",
+                  "delay": "1s"
+                }
+              }
+            ]
+          },
+          "default": [
+            {
+              "id": "notify-out-of-stock",
+              "type": "action",
+              "action": "http.post",
+              "params": {
+                "url": "${{inputs.notification_api_url}}",
+                "body": {
+                  "order_id": "${{inputs.order.id}}",
+                  "subject": "Out of Stock",
+                  "message": "Product is currently out of stock. We will notify you when it becomes available."
+                }
+              },
+              "timeout": "15s",
+              "retry": {
+                "max": 2,
+                "backoff": "exponential",
+                "delay": "1s"
+              }
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

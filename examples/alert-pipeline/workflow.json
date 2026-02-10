@@ -1,0 +1,157 @@
+{
+  "name": "alert-pipeline",
+  "description": "Route alerts by severity: critical triggers parallel notifications, warning goes to Slack, info is logged.",
+  "category": "operations",
+  "features": ["condition", "parallel", "http", "workflow.emit", "workflow.log"],
+  "input_schema": {
+    "type": "object",
+    "required": ["severity", "title", "message"],
+    "properties": {
+      "severity": {
+        "type": "string",
+        "description": "Alert severity level: critical, warning, or info",
+        "enum": ["critical", "warning", "info"]
+      },
+      "title": {
+        "type": "string",
+        "description": "Alert title"
+      },
+      "message": {
+        "type": "string",
+        "description": "Alert message body"
+      },
+      "slack_dm_url": {
+        "type": "string",
+        "description": "Slack webhook URL for direct messages (critical alerts)"
+      },
+      "slack_channel_url": {
+        "type": "string",
+        "description": "Slack webhook URL for channel notifications (warnings)"
+      },
+      "email_api_url": {
+        "type": "string",
+        "description": "Email API endpoint for critical alerts"
+      }
+    }
+  },
+  "definition": {
+    "timeout": "2m",
+    "on_timeout": "fail",
+    "steps": [
+      {
+        "id": "route-severity",
+        "type": "condition",
+        "config": {
+          "expression": "inputs.severity",
+          "branches": {
+            "critical": [
+              {
+                "id": "critical-notify",
+                "type": "parallel",
+                "config": {
+                  "mode": "all",
+                  "branches": [
+                    [
+                      {
+                        "id": "slack-dm",
+                        "type": "action",
+                        "action": "http.post",
+                        "params": {
+                          "url": "${{inputs.slack_dm_url}}",
+                          "body": {
+                            "text": "[CRITICAL] ${{inputs.title}}: ${{inputs.message}}"
+                          }
+                        },
+                        "timeout": "15s",
+                        "retry": {
+                          "max": 3,
+                          "backoff": "exponential",
+                          "delay": "1s"
+                        }
+                      }
+                    ],
+                    [
+                      {
+                        "id": "send-email",
+                        "type": "action",
+                        "action": "http.post",
+                        "params": {
+                          "url": "${{inputs.email_api_url}}",
+                          "body": {
+                            "subject": "[CRITICAL] ${{inputs.title}}",
+                            "body": "${{inputs.message}}",
+                            "priority": "high"
+                          }
+                        },
+                        "timeout": "15s",
+                        "retry": {
+                          "max": 3,
+                          "backoff": "exponential",
+                          "delay": "1s"
+                        }
+                      }
+                    ],
+                    [
+                      {
+                        "id": "emit-critical",
+                        "type": "action",
+                        "action": "workflow.emit",
+                        "params": {
+                          "signal": "critical_alert",
+                          "payload": {
+                            "title": "${{inputs.title}}",
+                            "message": "${{inputs.message}}",
+                            "severity": "critical"
+                          }
+                        }
+                      }
+                    ]
+                  ]
+                }
+              }
+            ],
+            "warning": [
+              {
+                "id": "slack-channel",
+                "type": "action",
+                "action": "http.post",
+                "params": {
+                  "url": "${{inputs.slack_channel_url}}",
+                  "body": {
+                    "text": "[WARNING] ${{inputs.title}}: ${{inputs.message}}"
+                  }
+                },
+                "timeout": "15s",
+                "retry": {
+                  "max": 2,
+                  "backoff": "exponential",
+                  "delay": "1s"
+                }
+              }
+            ],
+            "info": [
+              {
+                "id": "log-info",
+                "type": "action",
+                "action": "workflow.log",
+                "params": {
+                  "message": "[INFO] ${{inputs.title}}: ${{inputs.message}}"
+                }
+              }
+            ]
+          },
+          "default": [
+            {
+              "id": "log-unknown",
+              "type": "action",
+              "action": "workflow.log",
+              "params": {
+                "message": "Unknown severity '${{inputs.severity}}' for alert: ${{inputs.title}}"
+              }
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

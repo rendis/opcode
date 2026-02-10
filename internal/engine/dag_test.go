@@ -569,16 +569,18 @@ func TestParseDAG_ConditionWithoutConfig(t *testing.T) {
 	assertError(t, err, schema.ErrCodeValidation)
 }
 
-func TestParseDAG_ReasoningWithoutOptions(t *testing.T) {
+func TestParseDAG_ReasoningWithoutOptions_FreeForm(t *testing.T) {
 	cfg, _ := json.Marshal(schema.ReasoningConfig{
 		PromptContext: "test",
-		Options:       []schema.ReasoningOption{}, // no options
+		Options:       []schema.ReasoningOption{}, // no options = free-form
 	})
 	def := &schema.WorkflowDefinition{
 		Steps: []schema.StepDefinition{{ID: "no_opts", Type: schema.StepTypeReasoning, Config: cfg}},
 	}
 	_, err := ParseDAG(def)
-	assertError(t, err, schema.ErrCodeValidation)
+	if err != nil {
+		t.Fatalf("expected no error for free-form reasoning, got: %v", err)
+	}
 }
 
 func TestParseDAG_ReasoningWithoutConfig(t *testing.T) {

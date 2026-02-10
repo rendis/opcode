@@ -1,0 +1,63 @@
+{
+  "name": "csv-to-api",
+  "description": "Parse a CSV file to JSON via script, then POST the parsed rows to an API endpoint.",
+  "category": "data",
+  "features": ["shell", "http", "workflow.log"],
+  "input_schema": {
+    "type": "object",
+    "required": ["csv_path", "api_url"],
+    "properties": {
+      "csv_path": {
+        "type": "string",
+        "description": "Path to the CSV file to process"
+      },
+      "api_url": {
+        "type": "string",
+        "description": "API endpoint to POST the parsed data to"
+      }
+    }
+  },
+  "definition": {
+    "timeout": "10m",
+    "on_timeout": "fail",
+    "steps": [
+      {
+        "id": "parse-csv",
+        "type": "action",
+        "action": "shell.exec",
+        "params": {
+          "command": "python3",
+          "args": ["scripts/parse_csv.py", "${{inputs.csv_path}}"]
+        },
+        "timeout": "30s"
+      },
+      {
+        "id": "upload-data",
+        "type": "action",
+        "action": "http.post",
+        "depends_on": ["parse-csv"],
+        "params": {
+          "url": "${{inputs.api_url}}",
+          "body": {
+            "row_count": "${{steps.parse-csv.output.stdout.count}}"
+          }
+        },
+        "timeout": "30s",
+        "retry": {
+          "max": 2,
+          "backoff": "exponential",
+          "delay": "1s"
+        }
+      },
+      {
+        "id": "log-summary",
+        "type": "action",
+        "action": "workflow.log",
+        "depends_on": ["upload-data"],
+        "params": {
+          "message": "CSV upload complete"
+        }
+      }
+    ]
+  }
+}

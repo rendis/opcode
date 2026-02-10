@@ -24,6 +24,7 @@ const (
 	ErrCodeAssertionFailed   = "ASSERTION_FAILED"
 	ErrCodeIsolation         = "ISOLATION_ERROR"
 	ErrCodePathDenied        = "PATH_DENIED"
+	ErrCodeVault             = "VAULT_ERROR"
 )
 
 // OpcodeError is the structured error type for all OPCODE operations.

@@ -177,16 +177,29 @@ func (m *mockStore) ResolveDecision(_ context.Context, id string, res *store.Res
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, d := range m.decisions {
-		if d.ID == id {
+		if d.ID == id && d.Status == "pending" {
 			resJSON, _ := json.Marshal(res)
 			d.Resolution = resJSON
+			d.ResolvedBy = res.ResolvedBy
 			d.Status = "resolved"
 			now := time.Now().UTC()
 			d.ResolvedAt = &now
 			return nil
 		}
 	}
-	return fmt.Errorf("decision not found: %s", id)
+	return fmt.Errorf("decision not found or not pending: %s", id)
+}
+
+func (m *mockStore) CancelDecision(_ context.Context, id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, d := range m.decisions {
+		if d.ID == id && d.Status == "pending" {
+			d.Status = "cancelled"
+			return nil
+		}
+	}
+	return fmt.Errorf("decision not found or not pending: %s", id)
 }
 
 func (m *mockStore) ListPendingDecisions(_ context.Context, filter store.DecisionFilter) ([]*store.PendingDecision, error) {
@@ -211,6 +224,7 @@ func (m *mockStore) UpdateAgentSeen(_ context.Context, _ string) error         {
 func (m *mockStore) StoreSecret(_ context.Context, _ string, _ []byte) error   { return nil }
 func (m *mockStore) GetSecret(_ context.Context, _ string) ([]byte, error)     { return nil, nil }
 func (m *mockStore) DeleteSecret(_ context.Context, _ string) error            { return nil }
+func (m *mockStore) ListSecrets(_ context.Context) ([]string, error)           { return nil, nil }
 func (m *mockStore) StoreTemplate(_ context.Context, _ *store.WorkflowTemplate) error { return nil }
 func (m *mockStore) GetTemplate(_ context.Context, _, _ string) (*store.WorkflowTemplate, error) {
 	return nil, nil
@@ -218,9 +232,26 @@ func (m *mockStore) GetTemplate(_ context.Context, _, _ string) (*store.Workflow
 func (m *mockStore) ListTemplates(_ context.Context, _ store.TemplateFilter) ([]*store.WorkflowTemplate, error) {
 	return nil, nil
 }
-func (m *mockStore) Migrate(_ context.Context) error { return nil }
-func (m *mockStore) Vacuum(_ context.Context) error  { return nil }
-func (m *mockStore) Close() error                    { return nil }
+func (m *mockStore) CreatePlugin(_ context.Context, _ *store.Plugin) error   { return nil }
+func (m *mockStore) GetPlugin(_ context.Context, _ string) (*store.Plugin, error) {
+	return nil, nil
+}
+func (m *mockStore) UpdatePlugin(_ context.Context, _ string, _ string, _ string) error { return nil }
+func (m *mockStore) ListPlugins(_ context.Context) ([]*store.Plugin, error)             { return nil, nil }
+func (m *mockStore) CreateScheduledJob(_ context.Context, _ *store.ScheduledJob) error  { return nil }
+func (m *mockStore) GetScheduledJob(_ context.Context, _ string) (*store.ScheduledJob, error) {
+	return nil, nil
+}
+func (m *mockStore) UpdateScheduledJob(_ context.Context, _ string, _ store.ScheduledJobUpdate) error {
+	return nil
+}
+func (m *mockStore) ListScheduledJobs(_ context.Context, _ store.ScheduledJobFilter) ([]*store.ScheduledJob, error) {
+	return nil, nil
+}
+func (m *mockStore) DeleteScheduledJob(_ context.Context, _ string) error { return nil }
+func (m *mockStore) Migrate(_ context.Context) error                     { return nil }
+func (m *mockStore) Vacuum(_ context.Context) error                      { return nil }
+func (m *mockStore) Close() error                                        { return nil }
 
 // mockEventLog wraps mockStore to satisfy EventAppender via AppendEvent.
 type mockEventLog struct {
@@ -1374,4 +1405,509 @@ func sliceIndexOf(slice []string, item string) int {
 		}
 	}
 	return -1
+}
+
+// --- Reasoning node tests (Story 026) ---
+
+func TestExecutor_ReasoningStep_RichContext(t *testing.T) {
+	te := newTestEnv()
+
+	// Register an action that produces output.
+	te.registry.Register(&mockAction{
+		name: "fetch",
+		execFn: func(_ context.Context, _ actions.ActionInput) (*actions.ActionOutput, error) {
+			return &actions.ActionOutput{Data: json.RawMessage(`{"status":"healthy","count":42}`)}, nil
+		},
+	})
+
+	// Set up workflow context with intent and notes.
+	te.store.UpsertWorkflowContext(context.Background(), &store.WorkflowContext{
+		WorkflowID:     "wf-rich-ctx",
+		OriginalIntent: "Deploy application safely",
+		AgentNotes:     "Consider rollback risk",
+		AccumulatedData: json.RawMessage(`{"env":"staging"}`),
+	})
+
+	reasoningConfig, _ := json.Marshal(schema.ReasoningConfig{
+		PromptContext: "Choose deployment strategy",
+		Options: []schema.ReasoningOption{
+			{ID: "blue_green", Description: "Blue-green deployment"},
+			{ID: "canary", Description: "Canary deployment"},
+		},
+	})
+
+	wf := newWorkflow("wf-rich-ctx",
+		execActionStep("s1", "fetch"),
+		schema.StepDefinition{
+			ID:        "decide",
+			Type:      schema.StepTypeReasoning,
+			Config:    reasoningConfig,
+			DependsOn: []string{"s1"},
+		},
+	)
+	te.store.CreateWorkflow(context.Background(), wf)
+
+	result, err := te.executor.Run(context.Background(), wf, nil)
+	require.NoError(t, err)
+	assert.Equal(t, schema.WorkflowStatusSuspended, result.Status)
+
+	// Verify decision context is rich.
+	decisions, _ := te.store.ListPendingDecisions(context.Background(), store.DecisionFilter{
+		WorkflowID: "wf-rich-ctx",
+		Status:     "pending",
+	})
+	require.Len(t, decisions, 1)
+
+	var ctx map[string]any
+	require.NoError(t, json.Unmarshal(decisions[0].Context, &ctx))
+	assert.Equal(t, "Choose deployment strategy", ctx["prompt_context"])
+	assert.Equal(t, "Deploy application safely", ctx["workflow_intent"])
+	assert.Equal(t, "Consider rollback risk", ctx["agent_notes"])
+
+	// Step outputs should include s1's output.
+	stepOutputs := ctx["step_outputs"].(map[string]any)
+	s1Out := stepOutputs["s1"].(map[string]any)
+	assert.Equal(t, "healthy", s1Out["status"])
+	assert.Equal(t, float64(42), s1Out["count"])
+
+	// Accumulated data.
+	accum := ctx["accumulated_data"].(map[string]any)
+	assert.Equal(t, "staging", accum["env"])
+}
+
+func TestExecutor_ReasoningStep_TargetAgent(t *testing.T) {
+	te := newTestEnv()
+
+	reasoningConfig, _ := json.Marshal(schema.ReasoningConfig{
+		PromptContext: "Route to specific agent",
+		Options:       []schema.ReasoningOption{{ID: "a"}, {ID: "b"}},
+		TargetAgent:   "agent-007",
+	})
+
+	wf := newWorkflow("wf-target-agent",
+		schema.StepDefinition{
+			ID:     "decide",
+			Type:   schema.StepTypeReasoning,
+			Config: reasoningConfig,
+		},
+	)
+	te.store.CreateWorkflow(context.Background(), wf)
+
+	result, err := te.executor.Run(context.Background(), wf, nil)
+	require.NoError(t, err)
+	assert.Equal(t, schema.WorkflowStatusSuspended, result.Status)
+
+	decisions, _ := te.store.ListPendingDecisions(context.Background(), store.DecisionFilter{
+		WorkflowID: "wf-target-agent",
+		Status:     "pending",
+	})
+	require.Len(t, decisions, 1)
+	assert.Equal(t, "agent-007", decisions[0].TargetAgentID)
+}
+
+func TestExecutor_Resume_TimeoutFallback(t *testing.T) {
+	te := newTestEnv()
+
+	te.registry.Register(&mockAction{name: "process"})
+
+	reasoningConfig, _ := json.Marshal(schema.ReasoningConfig{
+		PromptContext: "Pick option",
+		Options: []schema.ReasoningOption{
+			{ID: "opt_a", Description: "A"},
+			{ID: "opt_b", Description: "B"},
+		},
+		Timeout:  "1ms",
+		Fallback: "opt_a",
+	})
+
+	wf := newWorkflow("wf-timeout-fb",
+		schema.StepDefinition{
+			ID:     "decide",
+			Type:   schema.StepTypeReasoning,
+			Config: reasoningConfig,
+		},
+		execActionStep("s2", "process", "decide"),
+	)
+	te.store.CreateWorkflow(context.Background(), wf)
+
+	// Run — suspends at reasoning step.
+	result, err := te.executor.Run(context.Background(), wf, nil)
+	require.NoError(t, err)
+	assert.Equal(t, schema.WorkflowStatusSuspended, result.Status)
+
+	// Wait for timeout to expire.
+	time.Sleep(5 * time.Millisecond)
+
+	// Resume — should auto-resolve with fallback and continue.
+	resumeResult, err := te.executor.Resume(context.Background(), "wf-timeout-fb")
+	require.NoError(t, err)
+	assert.Equal(t, schema.WorkflowStatusCompleted, resumeResult.Status)
+
+	// Verify decision was auto-resolved.
+	decisions, _ := te.store.ListPendingDecisions(context.Background(), store.DecisionFilter{
+		WorkflowID: "wf-timeout-fb",
+		Status:     "resolved",
+	})
+	require.Len(t, decisions, 1)
+	var res store.Resolution
+	require.NoError(t, json.Unmarshal(decisions[0].Resolution, &res))
+	assert.Equal(t, "opt_a", res.Choice)
+	assert.Equal(t, "timeout_auto_resolved", res.Reasoning)
+}
+
+func TestExecutor_Resume_TimeoutNoFallback(t *testing.T) {
+	te := newTestEnv()
+
+	reasoningConfig, _ := json.Marshal(schema.ReasoningConfig{
+		PromptContext: "Pick option",
+		Options: []schema.ReasoningOption{
+			{ID: "opt_a", Description: "A"},
+		},
+		Timeout: "1ms",
+		// No fallback set.
+	})
+
+	wf := newWorkflow("wf-timeout-nofb",
+		schema.StepDefinition{
+			ID:     "decide",
+			Type:   schema.StepTypeReasoning,
+			Config: reasoningConfig,
+		},
+	)
+	te.store.CreateWorkflow(context.Background(), wf)
+
+	// Run — suspends.
+	result, err := te.executor.Run(context.Background(), wf, nil)
+	require.NoError(t, err)
+	assert.Equal(t, schema.WorkflowStatusSuspended, result.Status)
+
+	// Wait for timeout.
+	time.Sleep(5 * time.Millisecond)
+
+	// Resume — should fail the step.
+	resumeResult, err := te.executor.Resume(context.Background(), "wf-timeout-nofb")
+	require.NoError(t, err)
+	assert.Equal(t, schema.WorkflowStatusFailed, resumeResult.Status)
+}
+
+func TestExecutor_Signal_InvalidChoice(t *testing.T) {
+	te := newTestEnv()
+
+	reasoningConfig, _ := json.Marshal(schema.ReasoningConfig{
+		PromptContext: "Pick option",
+		Options: []schema.ReasoningOption{
+			{ID: "opt_a", Description: "A"},
+			{ID: "opt_b", Description: "B"},
+		},
+	})
+
+	wf := newWorkflow("wf-invalid-choice",
+		schema.StepDefinition{
+			ID:     "decide",
+			Type:   schema.StepTypeReasoning,
+			Config: reasoningConfig,
+		},
+	)
+	te.store.CreateWorkflow(context.Background(), wf)
+
+	// Run — suspends.
+	_, err := te.executor.Run(context.Background(), wf, nil)
+	require.NoError(t, err)
+
+	// Signal with invalid choice.
+	err = te.executor.Signal(context.Background(), "wf-invalid-choice", schema.Signal{
+		Type:   schema.SignalDecision,
+		StepID: "decide",
+		Payload: map[string]any{
+			"choice": "opt_c",
+		},
+	})
+	require.Error(t, err)
+	var opErr *schema.OpcodeError
+	require.True(t, errors.As(err, &opErr))
+	assert.Equal(t, schema.ErrCodeValidation, opErr.Code)
+	assert.Contains(t, opErr.Error(), "opt_c")
+}
+
+func TestExecutor_ReasoningStep_NeverReplayOnResume(t *testing.T) {
+	te := newTestEnv()
+
+	te.registry.Register(&mockAction{name: "process"})
+
+	reasoningConfig, _ := json.Marshal(schema.ReasoningConfig{
+		PromptContext: "Pick option",
+		Options: []schema.ReasoningOption{
+			{ID: "opt_a", Description: "A"},
+			{ID: "opt_b", Description: "B"},
+		},
+	})
+
+	wf := newWorkflow("wf-no-replay",
+		schema.StepDefinition{
+			ID:     "decide",
+			Type:   schema.StepTypeReasoning,
+			Config: reasoningConfig,
+		},
+		execActionStep("s2", "process", "decide"),
+	)
+	te.store.CreateWorkflow(context.Background(), wf)
+
+	// Run — suspends.
+	result, err := te.executor.Run(context.Background(), wf, nil)
+	require.NoError(t, err)
+	assert.Equal(t, schema.WorkflowStatusSuspended, result.Status)
+
+	// Resolve via Signal.
+	err = te.executor.Signal(context.Background(), "wf-no-replay", schema.Signal{
+		Type:   schema.SignalDecision,
+		StepID: "decide",
+		Payload: map[string]any{
+			"choice": "opt_a",
+		},
+		Reasoning: "A is better",
+	})
+	require.NoError(t, err)
+
+	// Resume — reasoning step should NOT create a second decision.
+	resumeResult, err := te.executor.Resume(context.Background(), "wf-no-replay")
+	require.NoError(t, err)
+	assert.Equal(t, schema.WorkflowStatusCompleted, resumeResult.Status)
+
+	// Verify only 1 decision exists (not 2).
+	te.store.mu.Lock()
+	decisionCount := len(te.store.decisions)
+	te.store.mu.Unlock()
+	assert.Equal(t, 1, decisionCount)
+}
+
+// --- Story 027: Decision Resolution Tests ---
+
+func TestExecutor_Signal_ResolvedByTracking(t *testing.T) {
+	te := newTestEnv()
+
+	reasoningConfig, _ := json.Marshal(schema.ReasoningConfig{
+		PromptContext: "Pick option",
+		Options: []schema.ReasoningOption{
+			{ID: "opt_a", Description: "A"},
+			{ID: "opt_b", Description: "B"},
+		},
+	})
+
+	wf := newWorkflow("wf-resolved-by",
+		schema.StepDefinition{
+			ID:     "decide",
+			Type:   schema.StepTypeReasoning,
+			Config: reasoningConfig,
+		},
+	)
+	te.store.CreateWorkflow(context.Background(), wf)
+
+	// Run — suspends.
+	_, err := te.executor.Run(context.Background(), wf, nil)
+	require.NoError(t, err)
+
+	// Resolve with AgentID.
+	err = te.executor.Signal(context.Background(), "wf-resolved-by", schema.Signal{
+		Type:    schema.SignalDecision,
+		StepID:  "decide",
+		AgentID: "agent-42",
+		Payload: map[string]any{"choice": "opt_a"},
+	})
+	require.NoError(t, err)
+
+	// Verify resolved_by stores agent ID.
+	decisions, _ := te.store.ListPendingDecisions(context.Background(), store.DecisionFilter{
+		WorkflowID: "wf-resolved-by",
+		Status:     "resolved",
+	})
+	require.Len(t, decisions, 1)
+	assert.Equal(t, "agent-42", decisions[0].ResolvedBy)
+
+	var res store.Resolution
+	require.NoError(t, json.Unmarshal(decisions[0].Resolution, &res))
+	assert.Equal(t, "agent-42", res.ResolvedBy)
+}
+
+func TestExecutor_Signal_MultiAgentRejection(t *testing.T) {
+	te := newTestEnv()
+
+	reasoningConfig, _ := json.Marshal(schema.ReasoningConfig{
+		PromptContext: "Pick option",
+		Options:       []schema.ReasoningOption{{ID: "a"}, {ID: "b"}},
+		TargetAgent:   "agent-007",
+	})
+
+	wf := newWorkflow("wf-multi-agent",
+		schema.StepDefinition{
+			ID:     "decide",
+			Type:   schema.StepTypeReasoning,
+			Config: reasoningConfig,
+		},
+	)
+	te.store.CreateWorkflow(context.Background(), wf)
+
+	_, err := te.executor.Run(context.Background(), wf, nil)
+	require.NoError(t, err)
+
+	// Signal from wrong agent — should be rejected.
+	err = te.executor.Signal(context.Background(), "wf-multi-agent", schema.Signal{
+		Type:    schema.SignalDecision,
+		StepID:  "decide",
+		AgentID: "agent-wrong",
+		Payload: map[string]any{"choice": "a"},
+	})
+	require.Error(t, err)
+	var opErr *schema.OpcodeError
+	require.ErrorAs(t, err, &opErr)
+	assert.Equal(t, schema.ErrCodeValidation, opErr.Code)
+	assert.Contains(t, opErr.Error(), "agent-007")
+	assert.Contains(t, opErr.Error(), "agent-wrong")
+
+	// Signal from correct agent — should succeed.
+	err = te.executor.Signal(context.Background(), "wf-multi-agent", schema.Signal{
+		Type:    schema.SignalDecision,
+		StepID:  "decide",
+		AgentID: "agent-007",
+		Payload: map[string]any{"choice": "a"},
+	})
+	require.NoError(t, err)
+}
+
+func TestExecutor_Signal_CancelDecision(t *testing.T) {
+	te := newTestEnv()
+
+	te.registry.Register(&mockAction{name: "after"})
+
+	reasoningConfig, _ := json.Marshal(schema.ReasoningConfig{
+		PromptContext: "Pick option",
+		Options:       []schema.ReasoningOption{{ID: "a"}, {ID: "b"}},
+	})
+
+	wf := newWorkflow("wf-cancel-dec",
+		schema.StepDefinition{
+			ID:     "decide",
+			Type:   schema.StepTypeReasoning,
+			Config: reasoningConfig,
+		},
+		execActionStep("s2", "after", "decide"),
+	)
+	te.store.CreateWorkflow(context.Background(), wf)
+
+	// Run — suspends at reasoning step.
+	result, err := te.executor.Run(context.Background(), wf, nil)
+	require.NoError(t, err)
+	assert.Equal(t, schema.WorkflowStatusSuspended, result.Status)
+
+	// Cancel the decision.
+	err = te.executor.Signal(context.Background(), "wf-cancel-dec", schema.Signal{
+		Type:   schema.SignalCancel,
+		StepID: "decide",
+	})
+	require.NoError(t, err)
+
+	// Verify decision is cancelled.
+	te.store.mu.Lock()
+	var found *store.PendingDecision
+	for _, d := range te.store.decisions {
+		if d.StepID == "decide" {
+			found = d
+		}
+	}
+	te.store.mu.Unlock()
+	require.NotNil(t, found)
+	assert.Equal(t, "cancelled", found.Status)
+
+	// Resume — cancelled step should be skipped, workflow completes.
+	resumeResult, err := te.executor.Resume(context.Background(), "wf-cancel-dec")
+	require.NoError(t, err)
+	assert.Equal(t, schema.WorkflowStatusCompleted, resumeResult.Status)
+	assert.Equal(t, schema.StepStatusSkipped, resumeResult.Steps["decide"].Status)
+	assert.Equal(t, schema.StepStatusCompleted, resumeResult.Steps["s2"].Status)
+}
+
+func TestExecutor_Signal_FreeFormResolution(t *testing.T) {
+	te := newTestEnv()
+
+	// Reasoning with no options — free-form.
+	reasoningConfig, _ := json.Marshal(schema.ReasoningConfig{
+		PromptContext: "What should we do?",
+	})
+
+	wf := newWorkflow("wf-freeform",
+		schema.StepDefinition{
+			ID:     "decide",
+			Type:   schema.StepTypeReasoning,
+			Config: reasoningConfig,
+		},
+	)
+	te.store.CreateWorkflow(context.Background(), wf)
+
+	_, err := te.executor.Run(context.Background(), wf, nil)
+	require.NoError(t, err)
+
+	// Any choice should be accepted.
+	err = te.executor.Signal(context.Background(), "wf-freeform", schema.Signal{
+		Type:   schema.SignalDecision,
+		StepID: "decide",
+		Payload: map[string]any{
+			"choice": "custom_arbitrary_choice",
+		},
+		Reasoning: "Free-form reasoning",
+	})
+	require.NoError(t, err)
+
+	// Verify resolution stored.
+	decisions, _ := te.store.ListPendingDecisions(context.Background(), store.DecisionFilter{
+		WorkflowID: "wf-freeform",
+		Status:     "resolved",
+	})
+	require.Len(t, decisions, 1)
+	var res store.Resolution
+	require.NoError(t, json.Unmarshal(decisions[0].Resolution, &res))
+	assert.Equal(t, "custom_arbitrary_choice", res.Choice)
+}
+
+func TestExecutor_Resume_TimeoutResolvedBySystem(t *testing.T) {
+	te := newTestEnv()
+
+	te.registry.Register(&mockAction{name: "process"})
+
+	reasoningConfig, _ := json.Marshal(schema.ReasoningConfig{
+		PromptContext: "Pick option",
+		Options: []schema.ReasoningOption{
+			{ID: "opt_a", Description: "A"},
+		},
+		Timeout:  "1ms",
+		Fallback: "opt_a",
+	})
+
+	wf := newWorkflow("wf-timeout-sys",
+		schema.StepDefinition{
+			ID:     "decide",
+			Type:   schema.StepTypeReasoning,
+			Config: reasoningConfig,
+		},
+		execActionStep("s2", "process", "decide"),
+	)
+	te.store.CreateWorkflow(context.Background(), wf)
+
+	_, err := te.executor.Run(context.Background(), wf, nil)
+	require.NoError(t, err)
+
+	time.Sleep(5 * time.Millisecond)
+
+	resumeResult, err := te.executor.Resume(context.Background(), "wf-timeout-sys")
+	require.NoError(t, err)
+	assert.Equal(t, schema.WorkflowStatusCompleted, resumeResult.Status)
+
+	// Verify resolved_by is "system" for timeout auto-resolve.
+	decisions, _ := te.store.ListPendingDecisions(context.Background(), store.DecisionFilter{
+		WorkflowID: "wf-timeout-sys",
+		Status:     "resolved",
+	})
+	require.Len(t, decisions, 1)
+	var res store.Resolution
+	require.NoError(t, json.Unmarshal(decisions[0].Resolution, &res))
+	assert.Equal(t, "system", res.ResolvedBy)
+	assert.Equal(t, "timeout_auto_resolved", res.Reasoning)
 }

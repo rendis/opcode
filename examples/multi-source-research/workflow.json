@@ -1,0 +1,101 @@
+{
+  "name": "multi-source-research",
+  "description": "Fetch data from three sources in parallel, let an agent pick the best one, then log the selection.",
+  "category": "research",
+  "features": ["parallel", "http", "reasoning", "workflow.log"],
+  "input_schema": {
+    "type": "object",
+    "required": ["source_a_url", "source_b_url", "source_c_url"],
+    "properties": {
+      "source_a_url": {
+        "type": "string",
+        "description": "URL for source A"
+      },
+      "source_b_url": {
+        "type": "string",
+        "description": "URL for source B"
+      },
+      "source_c_url": {
+        "type": "string",
+        "description": "URL for source C"
+      }
+    }
+  },
+  "definition": {
+    "timeout": "5m",
+    "on_timeout": "fail",
+    "steps": [
+      {
+        "id": "fetch-a",
+        "type": "action",
+        "action": "http.get",
+        "params": {
+          "url": "${{inputs.source_a_url}}"
+        },
+        "timeout": "30s",
+        "retry": {
+          "max": 2,
+          "backoff": "linear",
+          "delay": "1s"
+        }
+      },
+      {
+        "id": "fetch-b",
+        "type": "action",
+        "action": "http.get",
+        "params": {
+          "url": "${{inputs.source_b_url}}"
+        },
+        "timeout": "30s",
+        "retry": {
+          "max": 2,
+          "backoff": "linear",
+          "delay": "1s"
+        }
+      },
+      {
+        "id": "fetch-c",
+        "type": "action",
+        "action": "http.get",
+        "params": {
+          "url": "${{inputs.source_c_url}}"
+        },
+        "timeout": "30s",
+        "retry": {
+          "max": 2,
+          "backoff": "linear",
+          "delay": "1s"
+        }
+      },
+      {
+        "id": "pick-best",
+        "type": "reasoning",
+        "depends_on": ["fetch-a", "fetch-b", "fetch-c"],
+        "config": {
+          "prompt_context": "Three data sources have been fetched. Review the responses and select which source has the most relevant, accurate, and complete data for the research task.",
+          "options": [
+            { "id": "source_a", "description": "Source A has the best data" },
+            { "id": "source_b", "description": "Source B has the best data" },
+            { "id": "source_c", "description": "Source C has the best data" }
+          ],
+          "data_inject": {
+            "source_a_data": "steps['fetch-a']",
+            "source_b_data": "steps['fetch-b']",
+            "source_c_data": "steps['fetch-c']"
+          },
+          "timeout": "1h",
+          "fallback": "source_a"
+        }
+      },
+      {
+        "id": "log-selection",
+        "type": "action",
+        "action": "workflow.log",
+        "depends_on": ["pick-best"],
+        "params": {
+          "message": "Best source selected by agent review"
+        }
+      }
+    ]
+  }
+}

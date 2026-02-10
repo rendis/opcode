@@ -474,6 +474,242 @@ func TestListTemplates(t *testing.T) {
 	assert.Len(t, list, 2)
 }
 
+// --- Plugin Tests ---
+
+func TestCreateGetPlugin(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	p := &Plugin{
+		ID:     uuid.New().String(),
+		Name:   "test-mcp-server",
+		Type:   "mcp",
+		Config: json.RawMessage(`{"command":"/usr/bin/mcp-server","args":["--port","3000"]}`),
+		Status: "active",
+	}
+	require.NoError(t, s.CreatePlugin(ctx, p))
+
+	got, err := s.GetPlugin(ctx, p.ID)
+	require.NoError(t, err)
+	assert.Equal(t, p.ID, got.ID)
+	assert.Equal(t, "test-mcp-server", got.Name)
+	assert.Equal(t, "mcp", got.Type)
+	assert.Equal(t, "active", got.Status)
+	assert.JSONEq(t, `{"command":"/usr/bin/mcp-server","args":["--port","3000"]}`, string(got.Config))
+}
+
+func TestGetPlugin_NotFound(t *testing.T) {
+	s := newTestStore(t)
+	_, err := s.GetPlugin(context.Background(), "nonexistent")
+	require.Error(t, err)
+	opcErr, ok := err.(*schema.OpcodeError)
+	require.True(t, ok)
+	assert.Equal(t, schema.ErrCodeNotFound, opcErr.Code)
+}
+
+func TestUpdatePlugin(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	p := &Plugin{
+		ID:     uuid.New().String(),
+		Name:   "update-test",
+		Type:   "mcp",
+		Config: json.RawMessage(`{}`),
+		Status: "active",
+	}
+	require.NoError(t, s.CreatePlugin(ctx, p))
+
+	require.NoError(t, s.UpdatePlugin(ctx, p.ID, "error", "connection refused"))
+
+	got, err := s.GetPlugin(ctx, p.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "error", got.Status)
+	assert.Equal(t, "connection refused", got.ErrorMessage)
+	assert.NotNil(t, got.LastHealthCheck)
+}
+
+func TestUpdatePlugin_NotFound(t *testing.T) {
+	s := newTestStore(t)
+	err := s.UpdatePlugin(context.Background(), "nonexistent", "active", "")
+	require.Error(t, err)
+}
+
+func TestListPlugins(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	for i := 0; i < 3; i++ {
+		require.NoError(t, s.CreatePlugin(ctx, &Plugin{
+			ID:     uuid.New().String(),
+			Name:   "plugin-" + string(rune('a'+i)),
+			Type:   "mcp",
+			Config: json.RawMessage(`{}`),
+			Status: "active",
+		}))
+	}
+
+	list, err := s.ListPlugins(ctx)
+	require.NoError(t, err)
+	assert.Len(t, list, 3)
+}
+
+// --- Scheduled Job Tests ---
+
+func TestCreateGetScheduledJob(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	next := time.Now().UTC().Add(time.Hour)
+	j := &ScheduledJob{
+		ID:              uuid.New().String(),
+		TemplateName:    "deploy",
+		TemplateVersion: "1.0.0",
+		CronExpression:  "0 * * * *",
+		Params:          json.RawMessage(`{"env":"prod"}`),
+		AgentID:         "system",
+		Enabled:         true,
+		NextRunAt:       &next,
+	}
+	require.NoError(t, s.CreateScheduledJob(ctx, j))
+
+	got, err := s.GetScheduledJob(ctx, j.ID)
+	require.NoError(t, err)
+	assert.Equal(t, j.ID, got.ID)
+	assert.Equal(t, "deploy", got.TemplateName)
+	assert.Equal(t, "1.0.0", got.TemplateVersion)
+	assert.Equal(t, "0 * * * *", got.CronExpression)
+	assert.JSONEq(t, `{"env":"prod"}`, string(got.Params))
+	assert.Equal(t, "system", got.AgentID)
+	assert.True(t, got.Enabled)
+	assert.NotNil(t, got.NextRunAt)
+}
+
+func TestGetScheduledJob_NotFound(t *testing.T) {
+	s := newTestStore(t)
+	_, err := s.GetScheduledJob(context.Background(), "nonexistent")
+	require.Error(t, err)
+	opcErr, ok := err.(*schema.OpcodeError)
+	require.True(t, ok)
+	assert.Equal(t, schema.ErrCodeNotFound, opcErr.Code)
+}
+
+func TestUpdateScheduledJob(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	j := &ScheduledJob{
+		ID:             uuid.New().String(),
+		TemplateName:   "deploy",
+		CronExpression: "0 * * * *",
+		AgentID:        "system",
+		Enabled:        true,
+	}
+	require.NoError(t, s.CreateScheduledJob(ctx, j))
+
+	now := time.Now().UTC()
+	nextRun := now.Add(time.Hour)
+	disabled := false
+	require.NoError(t, s.UpdateScheduledJob(ctx, j.ID, ScheduledJobUpdate{
+		Enabled:       &disabled,
+		LastRunAt:     &now,
+		NextRunAt:     &nextRun,
+		LastRunStatus: "success",
+	}))
+
+	got, err := s.GetScheduledJob(ctx, j.ID)
+	require.NoError(t, err)
+	assert.False(t, got.Enabled)
+	assert.NotNil(t, got.LastRunAt)
+	assert.NotNil(t, got.NextRunAt)
+	assert.Equal(t, "success", got.LastRunStatus)
+}
+
+func TestUpdateScheduledJob_NotFound(t *testing.T) {
+	s := newTestStore(t)
+	enabled := true
+	err := s.UpdateScheduledJob(context.Background(), "nonexistent", ScheduledJobUpdate{Enabled: &enabled})
+	require.Error(t, err)
+}
+
+func TestUpdateScheduledJob_Empty(t *testing.T) {
+	s := newTestStore(t)
+	// Empty update should be a no-op.
+	err := s.UpdateScheduledJob(context.Background(), "any-id", ScheduledJobUpdate{})
+	require.NoError(t, err)
+}
+
+func TestListScheduledJobs(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	// Create 3 jobs: 2 enabled, 1 disabled.
+	for i := 0; i < 3; i++ {
+		require.NoError(t, s.CreateScheduledJob(ctx, &ScheduledJob{
+			ID:             uuid.New().String(),
+			TemplateName:   "deploy",
+			CronExpression: "0 * * * *",
+			AgentID:        "agent-1",
+			Enabled:        i < 2, // first two enabled
+		}))
+	}
+
+	// List all.
+	all, err := s.ListScheduledJobs(ctx, ScheduledJobFilter{})
+	require.NoError(t, err)
+	assert.Len(t, all, 3)
+
+	// List enabled only.
+	enabled := true
+	list, err := s.ListScheduledJobs(ctx, ScheduledJobFilter{Enabled: &enabled})
+	require.NoError(t, err)
+	assert.Len(t, list, 2)
+
+	// List disabled only.
+	disabled := false
+	list, err = s.ListScheduledJobs(ctx, ScheduledJobFilter{Enabled: &disabled})
+	require.NoError(t, err)
+	assert.Len(t, list, 1)
+
+	// Filter by agent.
+	list, err = s.ListScheduledJobs(ctx, ScheduledJobFilter{AgentID: "agent-1"})
+	require.NoError(t, err)
+	assert.Len(t, list, 3)
+
+	list, err = s.ListScheduledJobs(ctx, ScheduledJobFilter{AgentID: "other-agent"})
+	require.NoError(t, err)
+	assert.Len(t, list, 0)
+
+	// Limit.
+	list, err = s.ListScheduledJobs(ctx, ScheduledJobFilter{Limit: 1})
+	require.NoError(t, err)
+	assert.Len(t, list, 1)
+}
+
+func TestDeleteScheduledJob(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	j := &ScheduledJob{
+		ID:             uuid.New().String(),
+		TemplateName:   "deploy",
+		CronExpression: "0 * * * *",
+		AgentID:        "system",
+		Enabled:        true,
+	}
+	require.NoError(t, s.CreateScheduledJob(ctx, j))
+	require.NoError(t, s.DeleteScheduledJob(ctx, j.ID))
+
+	_, err := s.GetScheduledJob(ctx, j.ID)
+	require.Error(t, err)
+}
+
+func TestDeleteScheduledJob_NotFound(t *testing.T) {
+	s := newTestStore(t)
+	err := s.DeleteScheduledJob(context.Background(), "nonexistent")
+	require.Error(t, err)
+}
+
 // --- Migration Tests ---
 
 func TestMigrateIdempotent(t *testing.T) {

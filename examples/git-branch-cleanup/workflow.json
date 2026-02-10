@@ -1,0 +1,103 @@
+{
+  "name": "git-branch-cleanup",
+  "description": "List branches merged into main, loop over each to check safety, and delete safe branches.",
+  "category": "devops",
+  "features": ["shell", "loop", "condition", "workflow.log"],
+  "input_schema": {
+    "type": "object",
+    "required": ["repo_dir"],
+    "properties": {
+      "repo_dir": {
+        "type": "string",
+        "description": "Path to the git repository"
+      },
+      "protected_branches": {
+        "type": "string",
+        "description": "Comma-separated list of branches to never delete (default: main,develop)",
+        "default": "main,develop"
+      }
+    }
+  },
+  "definition": {
+    "timeout": "5m",
+    "on_timeout": "fail",
+    "steps": [
+      {
+        "id": "list-merged",
+        "type": "action",
+        "action": "shell.exec",
+        "params": {
+          "command": "bash",
+          "args": ["-c", "git -C \"$1\" branch --merged main | sed 's/^[* ]*//' | tr -s ' ' | grep -v '^$'", "--", "${{inputs.repo_dir}}"]
+        },
+        "timeout": "15s"
+      },
+      {
+        "id": "parse-branches",
+        "type": "action",
+        "action": "shell.exec",
+        "depends_on": ["list-merged"],
+        "params": {
+          "command": "python3",
+          "args": ["-c", "import sys,json; lines=sys.stdin.read().strip().split('\\n'); branches=[b.strip() for b in lines if b.strip()]; print(json.dumps(branches))"],
+          "stdin": "${{steps.list-merged.output.stdout_raw}}"
+        },
+        "timeout": "10s"
+      },
+      {
+        "id": "cleanup-loop",
+        "type": "loop",
+        "depends_on": ["parse-branches"],
+        "config": {
+          "mode": "for_each",
+          "over": "steps['parse-branches'].stdout",
+          "max_iter": 100,
+          "body": [
+            {
+              "id": "check-protected",
+              "type": "condition",
+              "config": {
+                "expression": "!(iter.item in ['main', 'develop', 'master'])",
+                "branches": {
+                  "true": [
+                    {
+                      "id": "delete-branch",
+                      "type": "action",
+                      "action": "shell.exec",
+                      "params": {
+                        "command": "git",
+                        "args": ["-C", "${{inputs.repo_dir}}", "branch", "-d", "${{loop.item}}"]
+                      },
+                      "timeout": "10s"
+                    },
+                    {
+                      "id": "log-deleted",
+                      "type": "action",
+                      "action": "workflow.log",
+                      "depends_on": ["delete-branch"],
+                      "params": {
+                        "message": "Deleted merged branch",
+                        "branch": "${{loop.item}}"
+                      }
+                    }
+                  ]
+                },
+                "default": [
+                  {
+                    "id": "log-skipped",
+                    "type": "action",
+                    "action": "workflow.log",
+                    "params": {
+                      "message": "Skipped protected branch",
+                      "branch": "${{loop.item}}"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

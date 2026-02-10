@@ -1,0 +1,121 @@
+{
+  "name": "two-way-sync",
+  "description": "Fetch records from two systems, compare via hashing, and sync differences to the target.",
+  "category": "integration",
+  "features": ["http", "crypto", "condition", "workflow.log"],
+  "input_schema": {
+    "type": "object",
+    "required": ["system_a_url", "system_b_url", "upsert_url"],
+    "properties": {
+      "system_a_url": {
+        "type": "string",
+        "description": "API endpoint to fetch records from system A"
+      },
+      "system_b_url": {
+        "type": "string",
+        "description": "API endpoint to fetch records from system B"
+      },
+      "upsert_url": {
+        "type": "string",
+        "description": "API endpoint to upsert record differences"
+      }
+    }
+  },
+  "definition": {
+    "timeout": "10m",
+    "on_timeout": "fail",
+    "steps": [
+      {
+        "id": "fetch-a",
+        "type": "action",
+        "action": "http.get",
+        "params": {
+          "url": "${{inputs.system_a_url}}"
+        },
+        "timeout": "30s",
+        "retry": {
+          "max": 2,
+          "backoff": "exponential",
+          "delay": "1s"
+        }
+      },
+      {
+        "id": "fetch-b",
+        "type": "action",
+        "action": "http.get",
+        "params": {
+          "url": "${{inputs.system_b_url}}"
+        },
+        "timeout": "30s",
+        "retry": {
+          "max": 2,
+          "backoff": "exponential",
+          "delay": "1s"
+        }
+      },
+      {
+        "id": "hash-a",
+        "type": "action",
+        "action": "crypto.hash",
+        "depends_on": ["fetch-a"],
+        "params": {
+          "data": "${{steps.fetch-a.output.status_code}}",
+          "algorithm": "sha256"
+        },
+        "timeout": "5s"
+      },
+      {
+        "id": "hash-b",
+        "type": "action",
+        "action": "crypto.hash",
+        "depends_on": ["fetch-b"],
+        "params": {
+          "data": "${{steps.fetch-b.output.status_code}}",
+          "algorithm": "sha256"
+        },
+        "timeout": "5s"
+      },
+      {
+        "id": "check-drift",
+        "type": "condition",
+        "depends_on": ["hash-a", "hash-b"],
+        "config": {
+          "expression": "steps['hash-a'].hash != steps['hash-b'].hash",
+          "branches": {
+            "true": [
+              {
+                "id": "sync-to-target",
+                "type": "action",
+                "action": "http.post",
+                "params": {
+                  "url": "${{inputs.upsert_url}}",
+                  "body": {
+                    "action": "sync",
+                    "source": "a",
+                    "status_a": "${{steps.fetch-a.output.status_code}}",
+                    "status_b": "${{steps.fetch-b.output.status_code}}"
+                  }
+                },
+                "timeout": "30s",
+                "retry": {
+                  "max": 2,
+                  "backoff": "linear",
+                  "delay": "2s"
+                }
+              }
+            ]
+          }
+        }
+      },
+      {
+        "id": "log-result",
+        "type": "action",
+        "action": "workflow.log",
+        "depends_on": ["check-drift"],
+        "params": {
+          "message": "Two-way sync check complete"
+        }
+      }
+    ]
+  }
+}

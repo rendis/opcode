@@ -1,0 +1,89 @@
+{
+  "name": "digest-builder",
+  "description": "Fetch content from multiple URLs, log the results, and send via email API.",
+  "category": "content",
+  "features": ["loop", "http", "on_error"],
+  "input_schema": {
+    "type": "object",
+    "required": ["sources", "send_api_url", "recipient"],
+    "properties": {
+      "sources": {
+        "type": "array",
+        "description": "Array of URLs to fetch content from",
+        "items": { "type": "string" }
+      },
+      "send_api_url": {
+        "type": "string",
+        "description": "Email/notification API endpoint to send the digest"
+      },
+      "recipient": {
+        "type": "string",
+        "description": "Recipient email or channel ID"
+      }
+    }
+  },
+  "definition": {
+    "timeout": "5m",
+    "on_timeout": "fail",
+    "steps": [
+      {
+        "id": "fetch-sources",
+        "type": "loop",
+        "config": {
+          "mode": "for_each",
+          "over": "inputs.sources",
+          "max_iter": 50,
+          "body": [
+            {
+              "id": "fetch-url",
+              "type": "action",
+              "action": "http.get",
+              "params": {
+                "url": "${{loop.item}}"
+              },
+              "timeout": "20s",
+              "retry": {
+                "max": 2,
+                "backoff": "exponential",
+                "delay": "1s"
+              },
+              "on_error": {
+                "strategy": "ignore"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "log-digest",
+        "type": "action",
+        "action": "workflow.log",
+        "depends_on": ["fetch-sources"],
+        "params": {
+          "message": "Digest sources fetched, preparing to send",
+          "recipient": "${{inputs.recipient}}"
+        }
+      },
+      {
+        "id": "send-digest",
+        "type": "action",
+        "action": "http.post",
+        "depends_on": ["log-digest"],
+        "params": {
+          "url": "${{inputs.send_api_url}}",
+          "body": {
+            "to": "${{inputs.recipient}}",
+            "subject": "Daily Digest",
+            "message": "Digest compiled from configured sources"
+          }
+        },
+        "timeout": "15s",
+        "retry": {
+          "max": 2,
+          "backoff": "exponential",
+          "delay": "2s"
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,95 @@
+{
+  "name": "meeting-prep-brief",
+  "description": "Gather calendar events, related documents, and past meeting notes in parallel, then compile a briefing file.",
+  "category": "productivity",
+  "features": ["http", "workflow.log", "fs"],
+  "input_schema": {
+    "type": "object",
+    "required": ["calendar_url", "documents_url", "notes_url", "output_path"],
+    "properties": {
+      "calendar_url": {
+        "type": "string",
+        "description": "API URL to fetch upcoming calendar events"
+      },
+      "documents_url": {
+        "type": "string",
+        "description": "API URL to fetch related documents"
+      },
+      "notes_url": {
+        "type": "string",
+        "description": "API URL to fetch past meeting notes"
+      },
+      "output_path": {
+        "type": "string",
+        "description": "File path to write the briefing document"
+      }
+    }
+  },
+  "definition": {
+    "timeout": "5m",
+    "on_timeout": "fail",
+    "steps": [
+      {
+        "id": "fetch-calendar",
+        "type": "action",
+        "action": "http.get",
+        "params": {
+          "url": "${{inputs.calendar_url}}"
+        },
+        "timeout": "30s",
+        "retry": {
+          "max": 2,
+          "backoff": "exponential",
+          "delay": "1s"
+        }
+      },
+      {
+        "id": "fetch-documents",
+        "type": "action",
+        "action": "http.get",
+        "params": {
+          "url": "${{inputs.documents_url}}"
+        },
+        "timeout": "30s",
+        "retry": {
+          "max": 2,
+          "backoff": "exponential",
+          "delay": "1s"
+        }
+      },
+      {
+        "id": "fetch-notes",
+        "type": "action",
+        "action": "http.get",
+        "params": {
+          "url": "${{inputs.notes_url}}"
+        },
+        "timeout": "30s",
+        "retry": {
+          "max": 2,
+          "backoff": "exponential",
+          "delay": "1s"
+        }
+      },
+      {
+        "id": "log-merge",
+        "type": "action",
+        "action": "workflow.log",
+        "depends_on": ["fetch-calendar", "fetch-documents", "fetch-notes"],
+        "params": {
+          "message": "All three sources fetched successfully. Compiling briefing."
+        }
+      },
+      {
+        "id": "write-briefing",
+        "type": "action",
+        "action": "fs.write",
+        "depends_on": ["log-merge"],
+        "params": {
+          "path": "${{inputs.output_path}}",
+          "content": "Meeting prep briefing compiled successfully"
+        }
+      }
+    ]
+  }
+}

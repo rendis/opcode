@@ -1,0 +1,102 @@
+{
+  "name": "backup-verification",
+  "description": "Verify backup existence and freshness via shell script, raise reasoning decision if backup is stale.",
+  "category": "ops",
+  "features": ["shell", "condition", "reasoning"],
+  "input_schema": {
+    "type": "object",
+    "required": ["backup_dir", "max_age_hours"],
+    "properties": {
+      "backup_dir": {
+        "type": "string",
+        "description": "Directory path where backups are stored"
+      },
+      "max_age_hours": {
+        "type": "integer",
+        "description": "Maximum acceptable backup age in hours"
+      }
+    }
+  },
+  "definition": {
+    "timeout": "5m",
+    "on_timeout": "fail",
+    "steps": [
+      {
+        "id": "check-backup",
+        "type": "action",
+        "action": "shell.exec",
+        "params": {
+          "command": "bash",
+          "args": ["scripts/check_backup.sh", "${{inputs.backup_dir}}"]
+        },
+        "timeout": "30s"
+      },
+      {
+        "id": "verify-exists",
+        "type": "condition",
+        "depends_on": ["check-backup"],
+        "config": {
+          "expression": "steps['check-backup'].stdout.exists == true",
+          "branches": {
+            "true": [
+              {
+                "id": "check-freshness",
+                "type": "condition",
+                "config": {
+                  "expression": "steps['check-backup'].stdout.age_hours <= inputs.max_age_hours",
+                  "branches": {
+                    "true": [
+                      {
+                        "id": "log-ok",
+                        "type": "action",
+                        "action": "workflow.log",
+                        "params": {
+                          "message": "Backup is fresh and valid",
+                          "path": "${{steps.check-backup.output.stdout.path}}",
+                          "size_mb": "${{steps.check-backup.output.stdout.size_mb}}",
+                          "age_hours": "${{steps.check-backup.output.stdout.age_hours}}"
+                        }
+                      }
+                    ]
+                  },
+                  "default": [
+                    {
+                      "id": "stale-decision",
+                      "type": "reasoning",
+                      "config": {
+                        "prompt_context": "The latest backup is stale (older than the configured threshold). Review the backup details and decide whether to trigger a manual backup or investigate the backup pipeline.",
+                        "options": [
+                          { "id": "run-backup", "description": "Trigger a manual backup now" },
+                          { "id": "investigate", "description": "Investigate why the backup pipeline is stale" }
+                        ],
+                        "data_inject": {
+                          "backup_path": "steps['check-backup'].stdout.path",
+                          "size_mb": "steps['check-backup'].stdout.size_mb",
+                          "age_hours": "steps['check-backup'].stdout.age_hours",
+                          "max_age_hours": "inputs.max_age_hours"
+                        },
+                        "timeout": "30m",
+                        "fallback": "investigate"
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          "default": [
+            {
+              "id": "log-missing",
+              "type": "action",
+              "action": "workflow.log",
+              "params": {
+                "message": "No backup found in the specified directory",
+                "backup_dir": "${{inputs.backup_dir}}"
+              }
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

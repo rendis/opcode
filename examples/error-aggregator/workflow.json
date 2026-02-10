@@ -1,0 +1,110 @@
+{
+  "name": "error-aggregator",
+  "description": "Fetch error logs, check status, raise reasoning for investigation if errors found, then create a ticket.",
+  "category": "monitoring",
+  "features": ["http", "condition", "reasoning"],
+  "input_schema": {
+    "type": "object",
+    "required": ["error_logs_url", "ticket_api_url"],
+    "properties": {
+      "error_logs_url": {
+        "type": "string",
+        "description": "API endpoint to fetch error log entries"
+      },
+      "ticket_api_url": {
+        "type": "string",
+        "description": "API endpoint to create investigation tickets"
+      }
+    }
+  },
+  "definition": {
+    "timeout": "5m",
+    "on_timeout": "fail",
+    "steps": [
+      {
+        "id": "fetch-logs",
+        "type": "action",
+        "action": "http.get",
+        "params": {
+          "url": "${{inputs.error_logs_url}}"
+        },
+        "timeout": "30s",
+        "retry": {
+          "max": 3,
+          "backoff": "exponential",
+          "delay": "2s"
+        }
+      },
+      {
+        "id": "log-fetched",
+        "type": "action",
+        "action": "workflow.log",
+        "depends_on": ["fetch-logs"],
+        "params": {
+          "message": "Error logs fetched",
+          "status_code": "${{steps.fetch-logs.output.status_code}}"
+        }
+      },
+      {
+        "id": "check-new-errors",
+        "type": "condition",
+        "depends_on": ["log-fetched"],
+        "config": {
+          "expression": "steps['fetch-logs'].status_code == 200",
+          "branches": {
+            "true": [
+              {
+                "id": "triage-decision",
+                "type": "reasoning",
+                "config": {
+                  "prompt_context": "New errors have been detected in the error logs. Review the grouped errors and decide whether to investigate immediately, defer to the next sprint, or ignore them.",
+                  "options": [
+                    { "id": "investigate", "description": "Create a ticket and investigate these errors now" },
+                    { "id": "defer", "description": "Defer investigation to the next sprint" },
+                    { "id": "ignore", "description": "Ignore these errors as non-critical" }
+                  ],
+                  "data_inject": {
+                    "logs_url": "inputs.error_logs_url",
+                    "status_code": "steps['fetch-logs'].status_code"
+                  },
+                  "timeout": "1h",
+                  "fallback": "investigate"
+                }
+              },
+              {
+                "id": "create-ticket",
+                "type": "action",
+                "action": "http.post",
+                "depends_on": ["triage-decision"],
+                "condition": "steps['check-new-errors.true.triage-decision'].choice == 'investigate'",
+                "params": {
+                  "url": "${{inputs.ticket_api_url}}",
+                  "body": {
+                    "title": "Error investigation required",
+                    "source": "${{inputs.error_logs_url}}"
+                  }
+                },
+                "timeout": "15s",
+                "retry": {
+                  "max": 2,
+                  "backoff": "linear",
+                  "delay": "1s"
+                }
+              }
+            ]
+          },
+          "default": [
+            {
+              "id": "log-no-errors",
+              "type": "action",
+              "action": "workflow.log",
+              "params": {
+                "message": "No new errors detected in this cycle"
+              }
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

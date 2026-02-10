@@ -1,0 +1,106 @@
+{
+  "name": "form-processor",
+  "description": "Classify form data and route to the appropriate backend system.",
+  "category": "automation",
+  "features": ["crypto", "condition", "http"],
+  "input_schema": {
+    "type": "object",
+    "required": ["form_data"],
+    "properties": {
+      "form_data": {
+        "type": "object",
+        "description": "Form submission data with name, email, type, and message fields",
+        "properties": {
+          "name": { "type": "string" },
+          "email": { "type": "string" },
+          "type": { "type": "string" },
+          "message": { "type": "string" }
+        },
+        "required": ["name", "email", "type", "message"]
+      },
+      "ticket_api_url": {
+        "type": "string",
+        "description": "Support ticket creation endpoint"
+      },
+      "crm_api_url": {
+        "type": "string",
+        "description": "CRM lead creation endpoint"
+      },
+      "inbox_api_url": {
+        "type": "string",
+        "description": "General inbox endpoint"
+      }
+    }
+  },
+  "definition": {
+    "timeout": "3m",
+    "on_timeout": "fail",
+    "steps": [
+      {
+        "id": "hash-message",
+        "type": "action",
+        "action": "crypto.hash",
+        "params": {
+          "algorithm": "sha256",
+          "data": "${{inputs.form_data.message}}"
+        }
+      },
+      {
+        "id": "route",
+        "type": "condition",
+        "depends_on": ["hash-message"],
+        "config": {
+          "expression": "inputs.form_data.type == 'support'",
+          "branches": {
+            "true": [
+              {
+                "id": "create-ticket",
+                "type": "action",
+                "action": "http.post",
+                "params": {
+                  "url": "${{inputs.ticket_api_url}}",
+                  "body": {
+                    "name": "${{inputs.form_data.name}}",
+                    "email": "${{inputs.form_data.email}}",
+                    "type": "${{inputs.form_data.type}}",
+                    "message": "${{inputs.form_data.message}}",
+                    "message_hash": "${{steps.hash-message.output.hash}}"
+                  }
+                },
+                "timeout": "15s",
+                "retry": {
+                  "max": 2,
+                  "backoff": "exponential",
+                  "delay": "1s"
+                }
+              }
+            ]
+          },
+          "default": [
+            {
+              "id": "send-inbox",
+              "type": "action",
+              "action": "http.post",
+              "params": {
+                "url": "${{inputs.inbox_api_url}}",
+                "body": {
+                  "name": "${{inputs.form_data.name}}",
+                  "email": "${{inputs.form_data.email}}",
+                  "type": "${{inputs.form_data.type}}",
+                  "message": "${{inputs.form_data.message}}",
+                  "message_hash": "${{steps.hash-message.output.hash}}"
+                }
+              },
+              "timeout": "15s",
+              "retry": {
+                "max": 2,
+                "backoff": "exponential",
+                "delay": "1s"
+              }
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

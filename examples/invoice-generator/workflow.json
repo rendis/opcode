@@ -1,0 +1,94 @@
+{
+  "name": "invoice-generator",
+  "description": "Fetch order data, generate an invoice ID, write to file, and send via email API.",
+  "category": "commerce",
+  "features": ["http", "crypto", "fs"],
+  "input_schema": {
+    "type": "object",
+    "required": ["order_api_url", "order_id", "output_path", "email_api_url", "recipient_email"],
+    "properties": {
+      "order_api_url": {
+        "type": "string",
+        "description": "API endpoint to fetch order data (order_id appended as header)"
+      },
+      "order_id": {
+        "type": "string",
+        "description": "ID of the order to generate an invoice for"
+      },
+      "output_path": {
+        "type": "string",
+        "description": "File path to write the generated invoice"
+      },
+      "email_api_url": {
+        "type": "string",
+        "description": "Email API endpoint to send the invoice"
+      },
+      "recipient_email": {
+        "type": "string",
+        "description": "Recipient email address"
+      }
+    }
+  },
+  "definition": {
+    "timeout": "3m",
+    "on_timeout": "fail",
+    "steps": [
+      {
+        "id": "fetch-order",
+        "type": "action",
+        "action": "http.get",
+        "params": {
+          "url": "${{inputs.order_api_url}}",
+          "headers": {
+            "X-Order-Id": "${{inputs.order_id}}"
+          }
+        },
+        "timeout": "15s",
+        "retry": {
+          "max": 2,
+          "backoff": "exponential",
+          "delay": "1s"
+        }
+      },
+      {
+        "id": "generate-invoice-id",
+        "type": "action",
+        "action": "crypto.uuid",
+        "depends_on": ["fetch-order"],
+        "params": {}
+      },
+      {
+        "id": "write-invoice",
+        "type": "action",
+        "action": "fs.write",
+        "depends_on": ["generate-invoice-id"],
+        "params": {
+          "path": "${{inputs.output_path}}",
+          "content": "${{steps.fetch-order.output.status}}"
+        }
+      },
+      {
+        "id": "send-invoice",
+        "type": "action",
+        "action": "http.post",
+        "depends_on": ["write-invoice"],
+        "params": {
+          "url": "${{inputs.email_api_url}}",
+          "body": {
+            "to": "${{inputs.recipient_email}}",
+            "subject": "Invoice ${{steps.generate-invoice-id.output.uuid}}",
+            "order_id": "${{inputs.order_id}}",
+            "invoice_id": "${{steps.generate-invoice-id.output.uuid}}",
+            "status_code": "${{steps.fetch-order.output.status_code}}"
+          }
+        },
+        "timeout": "15s",
+        "retry": {
+          "max": 2,
+          "backoff": "exponential",
+          "delay": "2s"
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,91 @@
+{
+  "name": "content-summarizer",
+  "description": "Fetch a URL, hash content for tracking, write result to file, then get quality approval via reasoning.",
+  "category": "content",
+  "features": ["http", "crypto", "reasoning", "fs"],
+  "input_schema": {
+    "type": "object",
+    "required": ["url", "output_path"],
+    "properties": {
+      "url": {
+        "type": "string",
+        "description": "URL to fetch and summarize"
+      },
+      "output_path": {
+        "type": "string",
+        "description": "File path to write the final summary"
+      }
+    }
+  },
+  "definition": {
+    "timeout": "5m",
+    "on_timeout": "fail",
+    "steps": [
+      {
+        "id": "fetch",
+        "type": "action",
+        "action": "http.get",
+        "params": {
+          "url": "${{inputs.url}}"
+        },
+        "timeout": "30s",
+        "retry": {
+          "max": 2,
+          "backoff": "exponential",
+          "delay": "1s"
+        }
+      },
+      {
+        "id": "hash-content",
+        "type": "action",
+        "action": "crypto.hash",
+        "depends_on": ["fetch"],
+        "params": {
+          "algorithm": "sha256",
+          "data": "${{steps.fetch.output.content_type}}"
+        }
+      },
+      {
+        "id": "log-fetched",
+        "type": "action",
+        "action": "workflow.log",
+        "depends_on": ["fetch"],
+        "params": {
+          "message": "Fetched content from URL",
+          "url": "${{inputs.url}}",
+          "status_code": "${{steps.fetch.output.status_code}}",
+          "content_type": "${{steps.fetch.output.content_type}}"
+        }
+      },
+      {
+        "id": "write-result",
+        "type": "action",
+        "action": "fs.write",
+        "depends_on": ["hash-content", "log-fetched"],
+        "params": {
+          "path": "${{inputs.output_path}}",
+          "content": "Summary approved for URL"
+        }
+      },
+      {
+        "id": "review-quality",
+        "type": "reasoning",
+        "depends_on": ["write-result"],
+        "config": {
+          "prompt_context": "Review the fetched content for quality. Is it accurate, concise, and captures the key points? Approve if good, or request revision.",
+          "options": [
+            { "id": "approve", "description": "Content is accurate and complete" },
+            { "id": "revise", "description": "Content needs improvement" }
+          ],
+          "data_inject": {
+            "url": "inputs.url",
+            "content_hash": "steps.hash-content.output.hash",
+            "status_code": "steps.fetch.output.status_code"
+          },
+          "timeout": "1h",
+          "fallback": "approve"
+        }
+      }
+    ]
+  }
+}

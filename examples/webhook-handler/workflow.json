@@ -1,0 +1,70 @@
+{
+  "name": "webhook-handler",
+  "description": "Log an incoming webhook event and forward to a destination API with retry.",
+  "category": "integration",
+  "features": ["crypto", "http"],
+  "input_schema": {
+    "type": "object",
+    "required": ["payload", "destination_url"],
+    "properties": {
+      "payload": {
+        "type": "object",
+        "description": "The incoming webhook payload to process"
+      },
+      "destination_url": {
+        "type": "string",
+        "description": "Destination API URL to forward the transformed payload to"
+      },
+      "expected_source": {
+        "type": "string",
+        "description": "Expected source identifier for validation"
+      }
+    }
+  },
+  "definition": {
+    "timeout": "2m",
+    "on_timeout": "fail",
+    "steps": [
+      {
+        "id": "hash-payload",
+        "type": "action",
+        "action": "crypto.hash",
+        "params": {
+          "algorithm": "sha256",
+          "data": "${{inputs.payload.event}}"
+        }
+      },
+      {
+        "id": "log-event",
+        "type": "action",
+        "action": "workflow.log",
+        "depends_on": ["hash-payload"],
+        "params": {
+          "message": "Webhook payload received, forwarding to destination",
+          "event": "${{inputs.payload.event}}",
+          "destination": "${{inputs.destination_url}}",
+          "payload_hash": "${{steps.hash-payload.output.hash}}"
+        }
+      },
+      {
+        "id": "forward",
+        "type": "action",
+        "action": "http.post",
+        "depends_on": ["log-event"],
+        "params": {
+          "url": "${{inputs.destination_url}}",
+          "body": {
+            "event": "${{inputs.payload.event}}",
+            "payload_hash": "${{steps.hash-payload.output.hash}}"
+          }
+        },
+        "timeout": "30s",
+        "retry": {
+          "max": 3,
+          "backoff": "exponential",
+          "delay": "2s"
+        }
+      }
+    ]
+  }
+}

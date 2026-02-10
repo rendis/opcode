@@ -63,7 +63,8 @@ const shellExecInputSchema = `{
 const shellExecOutputSchema = `{
   "type": "object",
   "properties": {
-    "stdout": {"type": "string"},
+    "stdout": {"description": "auto-parsed JSON if valid, raw string otherwise"},
+    "stdout_raw": {"type": "string", "description": "always the raw string output"},
     "stderr": {"type": "string"},
     "exit_code": {"type": "integer"},
     "duration_ms": {"type": "integer"},
@@ -236,9 +237,21 @@ func (a *shellExecAction) Execute(ctx context.Context, input ActionInput) (*Acti
 		}
 	}
 
+	// Auto-parse stdout if it's valid JSON, for consistent interpolation
+	// (mirrors http.get which auto-parses JSON bodies).
+	stdoutStr := stdoutBuf.String()
+	var parsedStdout any = stdoutStr
+	if stdoutBuf.Len() > 0 && json.Valid(stdoutBuf.Bytes()) {
+		var parsed any
+		if err := json.Unmarshal(stdoutBuf.Bytes(), &parsed); err == nil {
+			parsedStdout = parsed
+		}
+	}
+
 	// Marshal output.
 	result := map[string]any{
-		"stdout":      stdoutBuf.String(),
+		"stdout":      parsedStdout,
+		"stdout_raw":  stdoutStr,
 		"stderr":      stderrBuf.String(),
 		"exit_code":   exitCode,
 		"duration_ms": durationMs,

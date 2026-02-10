@@ -230,7 +230,9 @@ func TestShellExec_ShellMode(t *testing.T) {
 		"shell":   true,
 	})
 	require.NoError(t, err)
-	assert.Equal(t, "3\n", result["stdout"])
+	// "3\n" is valid JSON (number), so stdout is auto-parsed to float64.
+	assert.Equal(t, float64(3), result["stdout"])
+	assert.Equal(t, "3\n", result["stdout_raw"])
 }
 
 func TestShellExec_ShellMode_WithArgs(t *testing.T) {
@@ -454,4 +456,54 @@ func TestLimitedWriter_MultipleWrites(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 5, n) // Reports full len even though only 3 written.
 	assert.Equal(t, "hellowor", buf.String())
+}
+
+// --- Auto-parse JSON stdout tests ---
+
+func TestShellExec_JSONStdout(t *testing.T) {
+	cfg := newShellTestConfig(t)
+	result, err := execShell(t, cfg, map[string]any{
+		"command": "echo",
+		"args":    []any{`{"name":"alice","age":30}`},
+	})
+	require.NoError(t, err)
+
+	// stdout should be auto-parsed into a map.
+	stdout, ok := result["stdout"].(map[string]any)
+	require.True(t, ok, "stdout should be parsed map, got %T", result["stdout"])
+	assert.Equal(t, "alice", stdout["name"])
+	assert.Equal(t, float64(30), stdout["age"])
+}
+
+func TestShellExec_PlainStdout(t *testing.T) {
+	cfg := newShellTestConfig(t)
+	result, err := execShell(t, cfg, map[string]any{
+		"command": "echo",
+		"args":    []any{"hello world"},
+	})
+	require.NoError(t, err)
+
+	// Non-JSON stdout stays as string.
+	stdout, ok := result["stdout"].(string)
+	require.True(t, ok, "stdout should be string, got %T", result["stdout"])
+	assert.Equal(t, "hello world\n", stdout)
+}
+
+func TestShellExec_StdoutRaw(t *testing.T) {
+	cfg := newShellTestConfig(t)
+	result, err := execShell(t, cfg, map[string]any{
+		"command": "echo",
+		"args":    []any{`{"x":1}`},
+	})
+	require.NoError(t, err)
+
+	// stdout_raw is always the raw string, even when stdout is parsed.
+	raw, ok := result["stdout_raw"].(string)
+	require.True(t, ok, "stdout_raw should be string, got %T", result["stdout_raw"])
+	assert.Equal(t, "{\"x\":1}\n", raw)
+
+	// stdout should be parsed.
+	parsed, ok := result["stdout"].(map[string]any)
+	require.True(t, ok, "stdout should be parsed map")
+	assert.Equal(t, float64(1), parsed["x"])
 }

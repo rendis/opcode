@@ -1,0 +1,64 @@
+{
+  "name": "free-form-decision",
+  "description": "Fetch context data, get a free-form agent assessment, and log the result.",
+  "category": "reasoning",
+  "features": ["http", "reasoning", "workflow.log"],
+  "input_schema": {
+    "type": "object",
+    "required": ["data_url", "alert_url"],
+    "properties": {
+      "data_url": {
+        "type": "string",
+        "description": "URL to fetch context data for analysis"
+      },
+      "alert_url": {
+        "type": "string",
+        "description": "URL to POST critical alerts to"
+      }
+    }
+  },
+  "definition": {
+    "timeout": "10m",
+    "on_timeout": "fail",
+    "steps": [
+      {
+        "id": "fetch-context",
+        "type": "action",
+        "action": "http.get",
+        "params": {
+          "url": "${{inputs.data_url}}"
+        },
+        "timeout": "30s",
+        "retry": {
+          "max": 2,
+          "backoff": "exponential",
+          "delay": "1s"
+        }
+      },
+      {
+        "id": "assess",
+        "type": "reasoning",
+        "depends_on": ["fetch-context"],
+        "config": {
+          "prompt_context": "Analyze this data and provide your assessment. Include the word 'critical' if immediate action is required.",
+          "options": [],
+          "data_inject": {
+            "context_data": "steps['fetch-context']"
+          },
+          "timeout": "30m",
+          "fallback": "no issues detected"
+        }
+      },
+      {
+        "id": "log-result",
+        "type": "action",
+        "action": "workflow.log",
+        "depends_on": ["assess"],
+        "params": {
+          "message": "Assessment completed for data source",
+          "source": "${{inputs.data_url}}"
+        }
+      }
+    ]
+  }
+}

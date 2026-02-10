@@ -1,0 +1,87 @@
+{
+  "name": "image-processing",
+  "description": "Verify a source image exists, hash it for tracking, copy to output, and upload metadata to a CDN.",
+  "category": "media",
+  "features": ["fs", "crypto", "http"],
+  "input_schema": {
+    "type": "object",
+    "required": ["source_path", "output_path", "cdn_upload_url"],
+    "properties": {
+      "source_path": {
+        "type": "string",
+        "description": "File path to the source image"
+      },
+      "output_path": {
+        "type": "string",
+        "description": "File path to write the processed image"
+      },
+      "cdn_upload_url": {
+        "type": "string",
+        "description": "CDN upload API endpoint"
+      },
+      "max_width": {
+        "type": "integer",
+        "description": "Maximum width in pixels for resizing (default: 1200)"
+      },
+      "quality": {
+        "type": "integer",
+        "description": "Compression quality 1-100 (default: 85)"
+      }
+    }
+  },
+  "definition": {
+    "timeout": "3m",
+    "on_timeout": "fail",
+    "steps": [
+      {
+        "id": "read-source",
+        "type": "action",
+        "action": "fs.stat",
+        "params": {
+          "path": "${{inputs.source_path}}"
+        }
+      },
+      {
+        "id": "hash-source",
+        "type": "action",
+        "action": "crypto.hash",
+        "depends_on": ["read-source"],
+        "params": {
+          "algorithm": "sha256",
+          "data": "${{steps.read-source.output.path}}"
+        }
+      },
+      {
+        "id": "copy-to-output",
+        "type": "action",
+        "action": "fs.copy",
+        "depends_on": ["read-source"],
+        "params": {
+          "src": "${{inputs.source_path}}",
+          "dst": "${{inputs.output_path}}"
+        }
+      },
+      {
+        "id": "upload-cdn",
+        "type": "action",
+        "action": "http.post",
+        "depends_on": ["copy-to-output", "hash-source"],
+        "params": {
+          "url": "${{inputs.cdn_upload_url}}",
+          "body": {
+            "file_path": "${{inputs.output_path}}",
+            "original_size": "${{steps.read-source.output.size}}",
+            "source_hash": "${{steps.hash-source.output.hash}}",
+            "source_path": "${{inputs.source_path}}"
+          }
+        },
+        "timeout": "30s",
+        "retry": {
+          "max": 2,
+          "backoff": "exponential",
+          "delay": "2s"
+        }
+      }
+    ]
+  }
+}
