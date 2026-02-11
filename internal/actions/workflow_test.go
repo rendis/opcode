@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"testing"
 
@@ -345,5 +346,101 @@ func TestRegisterWorkflowActions(t *testing.T) {
 	assert.True(t, reg.Has("workflow.context"))
 	assert.True(t, reg.Has("workflow.fail"))
 	assert.True(t, reg.Has("workflow.log"))
-	assert.Equal(t, 5, reg.Count())
+	assert.True(t, reg.Has("workflow.notify"))
+	assert.Equal(t, 6, reg.Count())
+}
+
+// --- mock notifier for workflow.notify tests ---
+
+type mockNotifier struct {
+	called  bool
+	agentID string
+	payload map[string]any
+	err     error
+}
+
+func (m *mockNotifier) Notify(_ context.Context, agentID string, payload map[string]any) error {
+	m.called = true
+	m.agentID = agentID
+	m.payload = payload
+	return m.err
+}
+
+func TestWorkflowNotify(t *testing.T) {
+	notifier := &mockNotifier{}
+	action := &workflowNotifyAction{deps: WorkflowActionDeps{Notifier: notifier}}
+	assert.Equal(t, "workflow.notify", action.Name())
+
+	out, err := action.Execute(context.Background(), ActionInput{
+		Params: map[string]any{
+			"message": "Data fetch complete",
+			"data":    map[string]any{"count": 42},
+		},
+		Context: map[string]any{
+			"workflow_id": "wf-1",
+			"step_id":     "step-1",
+			"agent_id":    "agent-1",
+		},
+	})
+
+	require.NoError(t, err)
+	assert.True(t, notifier.called)
+	assert.Equal(t, "agent-1", notifier.agentID)
+	assert.Equal(t, "Data fetch complete", notifier.payload["message"])
+	assert.Equal(t, "wf-1", notifier.payload["workflow_id"])
+	assert.Equal(t, "step-1", notifier.payload["step_id"])
+	assert.Equal(t, map[string]any{"count": 42}, notifier.payload["data"])
+	assert.JSONEq(t, `{"notified":true}`, string(out.Data))
+}
+
+func TestWorkflowNotifyDisconnected(t *testing.T) {
+	// Notifier returns nil for disconnected agent (best-effort).
+	notifier := &mockNotifier{}
+	action := &workflowNotifyAction{deps: WorkflowActionDeps{Notifier: notifier}}
+
+	out, err := action.Execute(context.Background(), ActionInput{
+		Params: map[string]any{"message": "hello"},
+		Context: map[string]any{
+			"agent_id": "disconnected-agent",
+		},
+	})
+
+	require.NoError(t, err)
+	assert.True(t, notifier.called)
+	assert.JSONEq(t, `{"notified":true}`, string(out.Data))
+}
+
+func TestWorkflowNotifyNoNotifier(t *testing.T) {
+	action := &workflowNotifyAction{deps: WorkflowActionDeps{}}
+
+	out, err := action.Execute(context.Background(), ActionInput{
+		Params: map[string]any{"message": "hello"},
+	})
+
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"notified":false,"reason":"no_notifier"}`, string(out.Data))
+}
+
+func TestWorkflowNotifyValidation(t *testing.T) {
+	action := &workflowNotifyAction{}
+
+	err := action.Validate(map[string]any{})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "message")
+
+	err = action.Validate(map[string]any{"message": "ok"})
+	assert.NoError(t, err)
+}
+
+func TestWorkflowNotifyError(t *testing.T) {
+	notifier := &mockNotifier{err: fmt.Errorf("send failed")}
+	action := &workflowNotifyAction{deps: WorkflowActionDeps{Notifier: notifier}}
+
+	out, err := action.Execute(context.Background(), ActionInput{
+		Params:  map[string]any{"message": "hello"},
+		Context: map[string]any{"agent_id": "agent-1"},
+	})
+
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"notified":false}`, string(out.Data))
 }

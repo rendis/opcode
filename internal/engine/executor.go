@@ -111,6 +111,7 @@ type executorImpl struct {
 // workflowRun tracks a single in-flight workflow execution.
 type workflowRun struct {
 	workflowID string
+	agentID    string
 	dag        *DAG
 	stepStates map[string]*store.StepState
 	cancel     context.CancelFunc
@@ -217,6 +218,7 @@ func (e *executorImpl) Run(ctx context.Context, wf *store.Workflow, params map[s
 	// Register the run.
 	run := &workflowRun{
 		workflowID: wf.ID,
+		agentID:    wf.AgentID,
 		dag:        dag,
 		stepStates: stepStates,
 		cancel:     execCancel,
@@ -345,6 +347,7 @@ func (e *executorImpl) Resume(ctx context.Context, workflowID string) (*Executio
 
 	run := &workflowRun{
 		workflowID: workflowID,
+		agentID:    wf.AgentID,
 		dag:        dag,
 		stepStates: stepStates,
 		cancel:     execCancel,
@@ -876,9 +879,18 @@ func (e *executorImpl) executeActionStep(ctx context.Context, run *workflowRun, 
 		}
 	}
 
+	// Build action context: workflow params enriched with execution metadata.
+	actionCtx := make(map[string]any, len(params)+3)
+	for k, v := range params {
+		actionCtx[k] = v
+	}
+	actionCtx["workflow_id"] = workflowID
+	actionCtx["step_id"] = stepDef.ID
+	actionCtx["agent_id"] = run.agentID
+
 	input := actions.ActionInput{
 		Params:  stepParams,
-		Context: params,
+		Context: actionCtx,
 	}
 
 	out, err := action.Execute(ctx, input)

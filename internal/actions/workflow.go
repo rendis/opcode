@@ -14,15 +14,21 @@ import (
 // The executor satisfies this by wiring it after construction (late-bind).
 type SubWorkflowRunner func(ctx context.Context, templateName, version string, params map[string]any, parentID, agentID string) (json.RawMessage, error)
 
+// AgentNotifier pushes notifications to connected agents via MCP SSE.
+type AgentNotifier interface {
+	Notify(ctx context.Context, agentID string, payload map[string]any) error
+}
+
 // WorkflowActionDeps holds the dependencies injected into workflow actions.
 type WorkflowActionDeps struct {
 	RunSubWorkflow SubWorkflowRunner
 	Store          store.Store
 	Hub            streaming.EventHub
+	Notifier       AgentNotifier
 	Logger         *slog.Logger
 }
 
-// WorkflowActions returns the five workflow-scoped actions.
+// WorkflowActions returns the six workflow-scoped actions.
 func WorkflowActions(deps WorkflowActionDeps) []Action {
 	return []Action{
 		&workflowRunAction{deps: deps},
@@ -30,6 +36,7 @@ func WorkflowActions(deps WorkflowActionDeps) []Action {
 		&workflowContextAction{deps: deps},
 		&workflowFailAction{},
 		&workflowLogAction{deps: deps},
+		&workflowNotifyAction{deps: deps},
 	}
 }
 
@@ -321,5 +328,57 @@ func (a *workflowLogAction) Execute(_ context.Context, input ActionInput) (*Acti
 	}
 
 	out, _ := json.Marshal(map[string]any{"logged": true})
+	return &ActionOutput{Data: json.RawMessage(out)}, nil
+}
+
+// --- workflow.notify ---
+
+type workflowNotifyAction struct {
+	deps WorkflowActionDeps
+}
+
+func (a *workflowNotifyAction) Name() string { return "workflow.notify" }
+
+func (a *workflowNotifyAction) Schema() ActionSchema {
+	return ActionSchema{
+		Description: "Push a notification to the workflow's agent via MCP SSE.",
+	}
+}
+
+func (a *workflowNotifyAction) Validate(input map[string]any) error {
+	if stringParam(input, "message", "") == "" {
+		return schema.NewError(schema.ErrCodeValidation, "workflow.notify: missing required param 'message'")
+	}
+	return nil
+}
+
+func (a *workflowNotifyAction) Execute(_ context.Context, input ActionInput) (*ActionOutput, error) {
+	p := input.Params
+	if p == nil {
+		p = map[string]any{}
+	}
+
+	message := stringParam(p, "message", "")
+	workflowID := stringParam(input.Context, "workflow_id", "")
+	stepID := stringParam(input.Context, "step_id", "")
+	agentID := stringParam(input.Context, "agent_id", "")
+
+	if a.deps.Notifier == nil {
+		out, _ := json.Marshal(map[string]any{"notified": false, "reason": "no_notifier"})
+		return &ActionOutput{Data: json.RawMessage(out)}, nil
+	}
+
+	payload := map[string]any{
+		"message":     message,
+		"workflow_id": workflowID,
+		"step_id":     stepID,
+	}
+	if data, ok := p["data"]; ok {
+		payload["data"] = data
+	}
+
+	err := a.deps.Notifier.Notify(context.Background(), agentID, payload)
+	notified := err == nil
+	out, _ := json.Marshal(map[string]any{"notified": notified})
 	return &ActionOutput{Data: json.RawMessage(out)}, nil
 }

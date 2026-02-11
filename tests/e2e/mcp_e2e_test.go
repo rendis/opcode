@@ -3,10 +3,11 @@ package e2e
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
-	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/rendis/opcode/internal/actions"
@@ -143,6 +144,23 @@ func extractJSON(t *testing.T, result *mcp.CallToolResult, target any) {
 	require.NoError(t, json.Unmarshal([]byte(text), target))
 }
 
+// extractQueryResult extracts a named array from a wrapped query result.
+func extractQueryResult[T any](t *testing.T, result *mcp.CallToolResult, key string) []T {
+	t.Helper()
+	var wrapper map[string][]T
+	extractJSON(t, result, &wrapper)
+	return wrapper[key]
+}
+
+// assertStructuredIsObject ensures structuredContent is a JSON object (not array/null).
+func assertStructuredIsObject(t *testing.T, result *mcp.CallToolResult) {
+	t.Helper()
+	require.NotNil(t, result.StructuredContent, "structuredContent should be present")
+	b, err := json.Marshal(result.StructuredContent)
+	require.NoError(t, err)
+	assert.True(t, len(b) > 0 && b[0] == '{', "structuredContent must be an object, got: %s", string(b[:min(len(b), 20)]))
+}
+
 // extractText extracts text content from a tool result.
 func extractText(t *testing.T, result *mcp.CallToolResult) string {
 	t.Helper()
@@ -239,9 +257,9 @@ func TestMCPFullLifecycle(t *testing.T) {
 		"filter":   map[string]any{"agent_id": "e2e-agent"},
 	})
 	assert.False(t, queryWfResult.IsError, "query workflows should succeed")
+	assertStructuredIsObject(t, queryWfResult)
 
-	var workflows []map[string]any
-	extractJSON(t, queryWfResult, &workflows)
+	workflows := extractQueryResult[map[string]any](t, queryWfResult, "workflows")
 	require.Len(t, workflows, 1)
 	assert.Equal(t, wfID, workflows[0]["id"])
 
@@ -251,9 +269,9 @@ func TestMCPFullLifecycle(t *testing.T) {
 		"filter":   map[string]any{"workflow_id": wfID},
 	})
 	assert.False(t, queryEvResult.IsError, "query events should succeed")
+	assertStructuredIsObject(t, queryEvResult)
 
-	var events []map[string]any
-	extractJSON(t, queryEvResult, &events)
+	events := extractQueryResult[map[string]any](t, queryEvResult, "events")
 	assert.NotEmpty(t, events, "should have workflow events")
 
 	// Verify key event types are present.
@@ -272,9 +290,9 @@ func TestMCPFullLifecycle(t *testing.T) {
 		"filter":   map[string]any{"name": "e2e-workflow"},
 	})
 	assert.False(t, queryTplResult.IsError, "query templates should succeed")
+	assertStructuredIsObject(t, queryTplResult)
 
-	var templates []map[string]any
-	extractJSON(t, queryTplResult, &templates)
+	templates := extractQueryResult[map[string]any](t, queryTplResult, "templates")
 	require.Len(t, templates, 1)
 	assert.Equal(t, "e2e-workflow", templates[0]["name"])
 }
@@ -357,8 +375,7 @@ func TestTemplateDefineAndRun(t *testing.T) {
 		"resource": "templates",
 		"filter":   map[string]any{"name": "versioned-wf"},
 	})
-	var tpls []map[string]any
-	extractJSON(t, qResult, &tpls)
+	tpls := extractQueryResult[map[string]any](t, qResult, "templates")
 	assert.Len(t, tpls, 2)
 }
 
@@ -506,14 +523,11 @@ func TestSignalDecision(t *testing.T) {
 	})
 	assert.False(t, signalResult.IsError, "signal should succeed")
 
-	// Give the executor a moment to process the resume.
-	time.Sleep(200 * time.Millisecond)
-
-	// Resume the workflow.
-	resumeResult, err := env.executor.Resume(ctx, wfID)
-	require.NoError(t, err)
-	require.NotNil(t, resumeResult)
-	assert.Equal(t, schema.WorkflowStatusCompleted, resumeResult.Status, "workflow should complete after decision")
+	// Signal auto-resumes for decision signals — verify workflow completed.
+	var signalOut map[string]any
+	extractJSON(t, signalResult, &signalOut)
+	assert.Equal(t, true, signalOut["resumed"])
+	assert.Equal(t, string(schema.WorkflowStatusCompleted), signalOut["status"])
 }
 
 // TestMultiStepDependencyChain tests a linear dependency chain: a -> b -> c.
@@ -602,8 +616,8 @@ func TestQueryFilters(t *testing.T) {
 
 	// Query all: should be 3.
 	qAll := env.callTool(t, "opcode.query", map[string]any{"resource": "workflows"})
-	var allWf []map[string]any
-	extractJSON(t, qAll, &allWf)
+	assertStructuredIsObject(t, qAll)
+	allWf := extractQueryResult[map[string]any](t, qAll, "workflows")
 	assert.Len(t, allWf, 3)
 
 	// Query by agent_id: should be 2.
@@ -611,8 +625,7 @@ func TestQueryFilters(t *testing.T) {
 		"resource": "workflows",
 		"filter":   map[string]any{"agent_id": "filter-agent-1"},
 	})
-	var agentWf []map[string]any
-	extractJSON(t, qAgent, &agentWf)
+	agentWf := extractQueryResult[map[string]any](t, qAgent, "workflows")
 	assert.Len(t, agentWf, 2)
 
 	// Query by status.
@@ -620,8 +633,7 @@ func TestQueryFilters(t *testing.T) {
 		"resource": "workflows",
 		"filter":   map[string]any{"status": "completed"},
 	})
-	var completedWf []map[string]any
-	extractJSON(t, qStatus, &completedWf)
+	completedWf := extractQueryResult[map[string]any](t, qStatus, "workflows")
 	assert.Len(t, completedWf, 3)
 
 	// Query with limit.
@@ -629,8 +641,7 @@ func TestQueryFilters(t *testing.T) {
 		"resource": "workflows",
 		"filter":   map[string]any{"limit": float64(1)},
 	})
-	var limitWf []map[string]any
-	extractJSON(t, qLimit, &limitWf)
+	limitWf := extractQueryResult[map[string]any](t, qLimit, "workflows")
 	assert.Len(t, limitWf, 1)
 }
 
@@ -672,7 +683,7 @@ func TestErrorHandling(t *testing.T) {
 	})
 }
 
-// TestToolsListViaJSONRPC verifies tools/list returns all 5 tools through the JSON-RPC protocol.
+// TestToolsListViaJSONRPC verifies tools/list returns all 6 tools through the JSON-RPC protocol.
 func TestToolsListViaJSONRPC(t *testing.T) {
 	env := newTestEnv(t)
 
@@ -715,5 +726,354 @@ func TestToolsListViaJSONRPC(t *testing.T) {
 	assert.Contains(t, toolNames, "opcode.signal")
 	assert.Contains(t, toolNames, "opcode.define")
 	assert.Contains(t, toolNames, "opcode.query")
-	assert.Len(t, toolNames, 5)
+	assert.Contains(t, toolNames, "opcode.diagram")
+	assert.Len(t, toolNames, 6)
+}
+
+// TestDiagramFromTemplate defines a template, then generates a Mermaid diagram from it.
+func TestDiagramFromTemplate(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+
+	require.NoError(t, env.store.RegisterAgent(ctx, &store.Agent{
+		ID: "diagram-agent", Name: "diagram-agent", Type: "system",
+	}))
+
+	// Define a multi-step template.
+	defineResult := env.callTool(t, "opcode.define", map[string]any{
+		"name": "diagram-wf",
+		"definition": map[string]any{
+			"steps": []any{
+				map[string]any{"id": "fetch", "action": "echo"},
+				map[string]any{"id": "transform", "action": "noop", "depends_on": []any{"fetch"}},
+				map[string]any{"id": "store", "action": "echo", "depends_on": []any{"transform"}},
+			},
+		},
+		"agent_id": "diagram-agent",
+	})
+	assert.False(t, defineResult.IsError, "define should succeed")
+
+	// Generate Mermaid diagram from template.
+	mermaidResult := env.callTool(t, "opcode.diagram", map[string]any{
+		"template_name": "diagram-wf",
+		"format":        "mermaid",
+	})
+	assert.False(t, mermaidResult.IsError, "diagram mermaid should succeed")
+
+	mermaidText := extractText(t, mermaidResult)
+	assert.Contains(t, mermaidText, "graph TD")
+	assert.Contains(t, mermaidText, "fetch")
+	assert.Contains(t, mermaidText, "transform")
+	assert.Contains(t, mermaidText, "store")
+	assert.Contains(t, mermaidText, "-->")
+
+	// Generate ASCII diagram from template.
+	asciiResult := env.callTool(t, "opcode.diagram", map[string]any{
+		"template_name": "diagram-wf",
+		"format":        "ascii",
+	})
+	assert.False(t, asciiResult.IsError, "diagram ascii should succeed")
+
+	asciiText := extractText(t, asciiResult)
+	assert.Contains(t, asciiText, "Start")
+	assert.Contains(t, asciiText, "End")
+	assert.Contains(t, asciiText, "fetch")
+
+	// Generate PNG diagram from template.
+	imageResult := env.callTool(t, "opcode.diagram", map[string]any{
+		"template_name": "diagram-wf",
+		"format":        "image",
+	})
+	assert.False(t, imageResult.IsError, "diagram image should succeed")
+
+	imageText := extractText(t, imageResult)
+	assert.NotEmpty(t, imageText, "base64 PNG should not be empty")
+}
+
+// TestDiagramFromWorkflow runs a workflow, then generates a diagram with runtime status.
+func TestDiagramFromWorkflow(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+
+	require.NoError(t, env.store.RegisterAgent(ctx, &store.Agent{
+		ID: "diagram-wf-agent", Name: "diagram-wf-agent", Type: "system",
+	}))
+
+	// Define and run a workflow.
+	env.callTool(t, "opcode.define", map[string]any{
+		"name": "diagram-status-wf",
+		"definition": map[string]any{
+			"steps": []any{
+				map[string]any{"id": "a", "action": "echo"},
+				map[string]any{"id": "b", "action": "noop", "depends_on": []any{"a"}},
+			},
+		},
+		"agent_id": "diagram-wf-agent",
+	})
+
+	runResult := env.callTool(t, "opcode.run", map[string]any{
+		"template_name": "diagram-status-wf",
+		"agent_id":      "diagram-wf-agent",
+		"params":        map[string]any{"key": "value"},
+	})
+	assert.False(t, runResult.IsError)
+
+	var runOut map[string]any
+	extractJSON(t, runResult, &runOut)
+	wfID := runOut["workflow_id"].(string)
+	assert.Equal(t, "completed", runOut["status"])
+
+	// Generate ASCII diagram with status.
+	diagramResult := env.callTool(t, "opcode.diagram", map[string]any{
+		"workflow_id":    wfID,
+		"format":        "ascii",
+		"include_status": "true",
+	})
+	assert.False(t, diagramResult.IsError, "diagram from workflow should succeed")
+
+	diagramText := extractText(t, diagramResult)
+	assert.Contains(t, diagramText, "[OK]", "completed steps should show [OK] status")
+
+	// Generate Mermaid diagram with status.
+	mermaidResult := env.callTool(t, "opcode.diagram", map[string]any{
+		"workflow_id": wfID,
+		"format":     "mermaid",
+	})
+	assert.False(t, mermaidResult.IsError)
+
+	mermaidText := extractText(t, mermaidResult)
+	assert.Contains(t, mermaidText, "graph TD")
+	assert.Contains(t, mermaidText, "class a completed")
+	assert.Contains(t, mermaidText, "class b completed")
+}
+
+// --- Notification tests ---
+
+// testNotifier captures notifications for testing.
+type testNotifier struct {
+	mu      sync.Mutex
+	entries []notifyEntry
+}
+
+type notifyEntry struct {
+	AgentID string
+	Payload map[string]any
+}
+
+func (n *testNotifier) Notify(_ context.Context, agentID string, payload map[string]any) error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.entries = append(n.entries, notifyEntry{AgentID: agentID, Payload: payload})
+	return nil
+}
+
+func (n *testNotifier) list() []notifyEntry {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	cp := make([]notifyEntry, len(n.entries))
+	copy(cp, n.entries)
+	return cp
+}
+
+// newTestEnvWithNotify creates a test env that includes workflow actions and a test notifier.
+func newTestEnvWithNotify(t *testing.T) (*testEnv, *testNotifier) {
+	t.Helper()
+
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "e2e.db")
+	s, err := store.NewLibSQLStore("file:" + dbPath)
+	require.NoError(t, err)
+	require.NoError(t, s.Migrate(context.Background()))
+	t.Cleanup(func() {
+		_ = s.Close()
+		_ = os.RemoveAll(dir)
+	})
+
+	eventLog := store.NewEventLog(s)
+	reg := actions.NewRegistry()
+	require.NoError(t, reg.Register(&noopAction{}))
+	require.NoError(t, reg.Register(&echoAction{}))
+
+	hub := streaming.NewMemoryHub()
+	exec := engine.NewExecutor(s, eventLog, reg, engine.ExecutorConfig{PoolSize: 4})
+
+	notifier := &testNotifier{}
+	require.NoError(t, actions.RegisterWorkflowActions(reg, actions.WorkflowActionDeps{
+		Store:    s,
+		Hub:      hub,
+		Notifier: notifier,
+		Logger:   slog.Default(),
+	}))
+
+	sessions := opcmcp.NewSessionRegistry()
+	srv := opcmcp.NewOpcodeServer(opcmcp.OpcodeServerDeps{
+		Executor: exec,
+		Store:    s,
+		Registry: reg,
+		Hub:      hub,
+		Sessions: sessions,
+	})
+
+	env := &testEnv{
+		store:    s,
+		eventLog: eventLog,
+		registry: reg,
+		executor: exec,
+		hub:      hub,
+		server:   srv,
+	}
+	return env, notifier
+}
+
+// TestWorkflowNotifyE2E verifies workflow.notify steps complete and deliver notifications.
+func TestWorkflowNotifyE2E(t *testing.T) {
+	env, notifier := newTestEnvWithNotify(t)
+	ctx := context.Background()
+
+	// Register agent.
+	require.NoError(t, env.store.RegisterAgent(ctx, &store.Agent{
+		ID: "notify-agent", Name: "Notify Agent", Type: "system",
+	}))
+
+	// Define template with notify steps mid-flow and at end.
+	defineResult := env.callTool(t, "opcode.define", map[string]any{
+		"name": "notify-e2e",
+		"definition": map[string]any{
+			"steps": []any{
+				map[string]any{"id": "s1", "action": "echo", "params": map[string]any{"msg": "hello"}},
+				map[string]any{
+					"id": "n1", "action": "workflow.notify",
+					"params":     map[string]any{"message": "mid-flow", "data": map[string]any{"progress": 50}},
+					"depends_on": []any{"s1"},
+				},
+				map[string]any{
+					"id": "s2", "action": "noop",
+					"depends_on": []any{"n1"},
+				},
+				map[string]any{
+					"id": "n2", "action": "workflow.notify",
+					"params":     map[string]any{"message": "done"},
+					"depends_on": []any{"s2"},
+				},
+			},
+		},
+		"agent_id": "notify-agent",
+	})
+	require.False(t, defineResult.IsError, "define should succeed")
+
+	// Run workflow.
+	runResult := env.callTool(t, "opcode.run", map[string]any{
+		"template_name": "notify-e2e",
+		"agent_id":      "notify-agent",
+	})
+	require.False(t, runResult.IsError, "run should succeed")
+
+	var runOut map[string]any
+	extractJSON(t, runResult, &runOut)
+	assert.Equal(t, "completed", runOut["status"])
+
+	// Verify all steps completed.
+	steps, _ := runOut["steps"].(map[string]any)
+	require.Len(t, steps, 4)
+	for _, sid := range []string{"s1", "n1", "s2", "n2"} {
+		step, _ := steps[sid].(map[string]any)
+		assert.Equal(t, "completed", step["status"], "step %s should be completed", sid)
+	}
+
+	// Verify notify step outputs.
+	n1step, _ := steps["n1"].(map[string]any)
+	n1out, _ := n1step["output"].(map[string]any)
+	assert.Equal(t, true, n1out["notified"])
+
+	n2step, _ := steps["n2"].(map[string]any)
+	n2out, _ := n2step["output"].(map[string]any)
+	assert.Equal(t, true, n2out["notified"])
+
+	// Verify notifications were captured by the test notifier.
+	entries := notifier.list()
+	require.Len(t, entries, 2, "should have 2 notifications")
+
+	assert.Equal(t, "notify-agent", entries[0].AgentID)
+	assert.Equal(t, "mid-flow", entries[0].Payload["message"])
+	assert.NotEmpty(t, entries[0].Payload["workflow_id"])
+	assert.Equal(t, "n1", entries[0].Payload["step_id"])
+	data0, _ := entries[0].Payload["data"].(map[string]any)
+	assert.Equal(t, float64(50), data0["progress"])
+
+	assert.Equal(t, "notify-agent", entries[1].AgentID)
+	assert.Equal(t, "done", entries[1].Payload["message"])
+	assert.Equal(t, "n2", entries[1].Payload["step_id"])
+}
+
+// TestWorkflowNotifyNoNotifierE2E verifies workflow.notify completes even without a notifier.
+func TestWorkflowNotifyNoNotifierE2E(t *testing.T) {
+	// Create env WITHOUT notifier in workflow deps.
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "e2e.db")
+	s, err := store.NewLibSQLStore("file:" + dbPath)
+	require.NoError(t, err)
+	require.NoError(t, s.Migrate(context.Background()))
+	t.Cleanup(func() {
+		_ = s.Close()
+		_ = os.RemoveAll(dir)
+	})
+
+	eventLog := store.NewEventLog(s)
+	reg := actions.NewRegistry()
+	require.NoError(t, reg.Register(&noopAction{}))
+	hub := streaming.NewMemoryHub()
+	exec := engine.NewExecutor(s, eventLog, reg, engine.ExecutorConfig{PoolSize: 4})
+
+	// Register workflow actions WITHOUT notifier.
+	require.NoError(t, actions.RegisterWorkflowActions(reg, actions.WorkflowActionDeps{
+		Store:  s,
+		Hub:    hub,
+		Logger: slog.Default(),
+	}))
+
+	srv := opcmcp.NewOpcodeServer(opcmcp.OpcodeServerDeps{
+		Executor: exec, Store: s, Registry: reg, Hub: hub,
+	})
+
+	env := &testEnv{
+		store: s, eventLog: eventLog, registry: reg,
+		executor: exec, hub: hub, server: srv,
+	}
+
+	ctx := context.Background()
+	require.NoError(t, env.store.RegisterAgent(ctx, &store.Agent{
+		ID: "no-notifier-agent", Name: "No Notifier", Type: "system",
+	}))
+
+	defineResult := env.callTool(t, "opcode.define", map[string]any{
+		"name": "no-notifier-test",
+		"definition": map[string]any{
+			"steps": []any{
+				map[string]any{"id": "s1", "action": "noop"},
+				map[string]any{
+					"id": "n1", "action": "workflow.notify",
+					"params":     map[string]any{"message": "test"},
+					"depends_on": []any{"s1"},
+				},
+			},
+		},
+		"agent_id": "no-notifier-agent",
+	})
+	require.False(t, defineResult.IsError)
+
+	runResult := env.callTool(t, "opcode.run", map[string]any{
+		"template_name": "no-notifier-test",
+		"agent_id":      "no-notifier-agent",
+	})
+	require.False(t, runResult.IsError)
+
+	var runOut map[string]any
+	extractJSON(t, runResult, &runOut)
+	assert.Equal(t, "completed", runOut["status"])
+
+	steps, _ := runOut["steps"].(map[string]any)
+	n1step, _ := steps["n1"].(map[string]any)
+	n1out, _ := n1step["output"].(map[string]any)
+	assert.Equal(t, false, n1out["notified"])
+	assert.Equal(t, "no_notifier", n1out["reason"])
 }
