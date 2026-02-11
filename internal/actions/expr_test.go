@@ -261,17 +261,18 @@ func TestExprEvalAction_Execute_ArrayOperations(t *testing.T) {
 func TestExprEvalAction_Execute_ScopeAccess(t *testing.T) {
 	a := ExprActions()[0].(*exprEvalAction)
 
+	// Context matches executor reality: step output is stored directly
+	// without an "output" wrapper. Access via steps['id'].field, not
+	// steps['id'].output.field (the .output syntax is only for ${{}} interpolation).
 	input := ActionInput{
 		Params: map[string]any{
-			"expression": "steps['fetch-data'].output.body.count + inputs.offset",
+			"expression": "steps['fetch-data'].body.count + inputs.offset",
 		},
 		Context: map[string]any{
 			"steps": map[string]any{
 				"fetch-data": map[string]any{
-					"output": map[string]any{
-						"body": map[string]any{
-							"count": 10,
-						},
+					"body": map[string]any{
+						"count": 10,
 					},
 				},
 			},
@@ -287,6 +288,29 @@ func TestExprEvalAction_Execute_ScopeAccess(t *testing.T) {
 	var result map[string]any
 	require.NoError(t, json.Unmarshal(output.Data, &result))
 	assert.Equal(t, float64(15), result["result"])
+}
+
+func TestExprEvalAction_Execute_OutputWrapperNotInScope(t *testing.T) {
+	a := ExprActions()[0].(*exprEvalAction)
+
+	// The executor provides step outputs directly (no .output wrapper).
+	// Using steps['id'].output.field must fail because "output" is not a key
+	// in the step's output map.
+	input := ActionInput{
+		Params: map[string]any{
+			"expression": "steps['fetch-data'].output.body.count",
+		},
+		Context: map[string]any{
+			"steps": map[string]any{
+				"fetch-data": map[string]any{
+					"body": map[string]any{"count": 10},
+				},
+			},
+		},
+	}
+
+	_, err := a.Execute(context.Background(), input)
+	require.Error(t, err)
 }
 
 func TestExprEvalAction_Execute_ExplicitData(t *testing.T) {

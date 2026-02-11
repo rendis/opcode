@@ -57,11 +57,11 @@ Used for: condition step `expression`, step-level `condition` guards, loop `cond
 
 ```plaintext
 inputs.count > 10
-steps.fetch.output.status_code == 200
-steps.check.output.valid == true && inputs.mode == "strict"
+steps.fetch.status_code == 200
+steps.check.valid == true && inputs.mode == "strict"
 iter.index < 5
 iter.item.status == "active"
-size(steps.list.output.items) > 0
+size(steps.list.items) > 0
 ```
 
 **Type coercion**: CEL is type-safe. Numeric comparisons require same types. JSON numbers are typically `double` in CEL.
@@ -76,16 +76,16 @@ The entire interpolation scope is passed as input JSON object.
 
 ```jq
 # Extract names from a list
-.steps.list.output.items | map(.name)
+.steps.list.items | map(.name)
 
 # Filter active records
-[.steps.data.output.records[] | select(.active)]
+[.steps.data.records[] | select(.active)]
 
 # Simple JSON array literal
 ["a", "b", "c"]
 
 # Transform with computation
-.steps.data.output.items | map({key: .id, value: .name})
+.steps.data.items | map({key: .id, value: .name})
 ```
 
 ### Expr (expr-lang)
