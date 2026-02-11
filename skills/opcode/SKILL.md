@@ -64,7 +64,7 @@ OPCODE runs as a **persistent SSE daemon**. 1 server, N agents, 1 database. Agen
 
 ### Configuration
 
-Data directory: `~/.opcode/` (DB, settings). Created automatically.
+Data directory: `~/.opcode/` (DB, settings, pidfile). Created automatically.
 
 First-time setup (installs config and starts daemon):
 
@@ -83,6 +83,7 @@ Writes `~/.opcode/settings.json`, downloads [`mermaid-ascii`](https://github.com
 | `db_path`     | `~/.opcode/opcode.db`   | `OPCODE_DB_PATH`     | Path to embedded libSQL database            |
 | `log_level`   | `info`                  | `OPCODE_LOG_LEVEL`   | `debug`, `info`, `warn`, `error`            |
 | `pool_size`   | `10`                    | `OPCODE_POOL_SIZE`   | Worker pool size                            |
+| `panel`       | `false`                 | `OPCODE_PANEL`       | Enable web panel (`true`/`1`)               |
 | _(env only)_  | _(empty)_               | `OPCODE_VAULT_KEY`   | Passphrase for secret vault (never in JSON) |
 
 > **Security**: Never put `OPCODE_VAULT_KEY` in `settings.json`. Use env vars or your platform's secrets manager. The passphrase derives the AES-256 encryption key via PBKDF2.
@@ -94,6 +95,38 @@ OPCODE_VAULT_KEY="my-passphrase" opcode
 ```
 
 `install` is only needed once. Subsequent restarts use `opcode` directly with the env var.
+
+### Subcommands
+
+| Command           | Description                                            |
+| ----------------- | ------------------------------------------------------ |
+| `opcode`          | Start SSE daemon (same as `opcode serve`)              |
+| `opcode serve`    | Start SSE daemon explicitly                            |
+| `opcode install`  | Write settings.json, SIGHUP running server or start    |
+| `opcode update`   | Self-update (GitHub releases → `go install` fallback)  |
+| `opcode version`  | Print embedded version (default `dev`)                 |
+
+### Hot-Reload via SIGHUP
+
+Running `opcode install` with a server already running sends SIGHUP to reload configuration without restarting. You can also send it manually: `kill -HUP $(cat ~/.opcode/opcode.pid)`.
+
+| Setting      | Hot-Reload | Notes                  |
+| ------------ | ---------- | ---------------------- |
+| `panel`      | YES        | Mux swapped atomically |
+| `log_level`  | YES        | LevelVar.Set()         |
+| `listen_addr`| NO         | Needs listener rebind  |
+| `base_url`   | NO         | SSEServer constructed  |
+| `db_path`    | NO         | Store opened at startup|
+| `pool_size`  | NO         | Pool sized at startup  |
+
+### Building with Version
+
+```bash
+make build          # embeds git tag/commit as version
+./opcode version    # prints e.g. "v1.0.0" or "abc1234-dirty"
+```
+
+Without `make`, `go build` works normally (version = `dev`).
 
 ### MCP Client Configuration
 
@@ -115,15 +148,16 @@ Each agent self-identifies via the `agent_id` parameter in tool calls. Opcode au
 
 ### Startup Sequence
 
-1. Loads config from `~/.opcode/settings.json` (env vars override)
-2. Creates data directory, opens/creates libSQL database, runs migrations
-3. Downloads `mermaid-ascii` to `~/.opcode/bin/` (non-fatal — falls back to built-in renderer)
+1. Writes pidfile to `~/.opcode/opcode.pid`
+2. Loads config from `~/.opcode/settings.json` (env vars override)
+3. Creates data directory, opens/creates libSQL database, runs migrations
 4. Suspends orphaned `active` workflows (emits `workflow_interrupted`)
 5. Initializes secret vault (if `OPCODE_VAULT_KEY` set)
 6. Registers 24 built-in actions
 7. Starts cron scheduler (recovers missed jobs)
-8. Begins listening for MCP JSON-RPC over SSE + web panel on same port
-9. Shuts down gracefully on SIGTERM/SIGINT (10s timeout)
+8. Registers SIGHUP handler for config hot-reload
+9. Begins listening for MCP JSON-RPC over SSE (+ web panel if `panel` enabled) on same port
+10. Shuts down gracefully on SIGTERM/SIGINT (10s timeout), removes pidfile
 
 ### Recovery
 
@@ -308,7 +342,7 @@ Generate a visual DAG diagram from a template or running workflow.
 
 ## Web Panel
 
-The daemon serves a web management panel at the same port as MCP SSE (default `http://localhost:4100`). No additional configuration needed.
+The daemon can serve a web management panel at the same port as MCP SSE (default `http://localhost:4100`). Enable with `--panel` flag or `OPCODE_PANEL=true` env var. Can be toggled at runtime via SIGHUP.
 
 | Page            | Features                                                  |
 | --------------- | --------------------------------------------------------- |
