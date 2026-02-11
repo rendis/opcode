@@ -6,7 +6,16 @@
     <img alt="OPCODE — Agent-first workflow orchestration engine" src="assets/banner-light.svg" width="100%">
   </picture>
 
-[![Go](https://img.shields.io/badge/Go-1.25+-00ADD8?style=flat&logo=go&logoColor=white)](https://go.dev) [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE) [![Tests](https://img.shields.io/badge/Tests-981_passing-success)](https://github.com/rendis/opcode)
+  <a href="https://go.dev"><img src="https://img.shields.io/badge/Go-1.25+-00ADD8?style=flat&logo=go" alt="Go Version"></a>
+  <a href="https://pkg.go.dev/github.com/rendis/opcode"><img src="https://pkg.go.dev/badge/github.com/rendis/opcode.svg" alt="Go Reference"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License"></a>
+  <a href="https://goreportcard.com/report/github.com/rendis/opcode"><img src="https://goreportcard.com/badge/github.com/rendis/opcode" alt="Go Report Card"></a>
+  <a href="https://github.com/rendis/opcode/releases"><img src="https://img.shields.io/github/v/release/rendis/opcode" alt="Latest Release"></a>
+  <a href="https://github.com/rendis/opcode/commits/main"><img src="https://img.shields.io/github/last-commit/rendis/opcode" alt="Last Commit"></a>
+  <a href="https://github.com/rendis/opcode"><img src="https://img.shields.io/github/repo-size/rendis/opcode" alt="Repo Size"></a>
+  <a href="https://github.com/rendis/opcode/graphs/contributors"><img src="https://img.shields.io/github/contributors/rendis/opcode" alt="Contributors"></a>
+  <a href="#agent-skill"><img src="https://img.shields.io/badge/AI_Agents-Skill_Available-8A2BE2?style=flat" alt="AI Agent Skill"></a>
+  <a href="https://deepwiki.com/rendis/opcode"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"></a>
 
 </div>
 
