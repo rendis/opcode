@@ -1,7 +1,7 @@
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -X main.version=$(VERSION)
 
-.PHONY: build release clean
+.PHONY: build release clean benchmarks
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o opcode ./cmd/opcode/
@@ -18,6 +18,9 @@ release: clean
 	tar -czf dist/opcode_Linux_x86_64.tar.gz -C dist/opcode_linux_amd64 opcode
 	@cd dist && shasum -a 256 *.tar.gz > checksums.txt
 	@echo "Release artifacts in dist/"
+
+benchmarks:
+	go run ./cmd/gen-benchmarks
 
 clean:
 	rm -rf dist/ opcode

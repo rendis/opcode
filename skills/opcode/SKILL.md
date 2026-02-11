@@ -2,34 +2,35 @@
 name: opcode
 description: >
   Agent-first workflow orchestration engine exposed via MCP (SSE daemon).
-  Define, execute, monitor, and signal workflows with 6 MCP tools.
+  Defines, executes, monitors, and signals workflows with 6 MCP tools.
   Supports DAG-based execution, 6 step types (action, condition, loop,
-  parallel, wait, reasoning), 24+ built-in actions, ${{}} interpolation,
+  parallel, wait, reasoning), 25 built-in actions, ${{}} interpolation,
   reasoning nodes for human-in-the-loop decisions, and secret vault.
   Use when defining workflows, running templates, checking status,
-  sending signals, or querying workflow history.
+  sending signals, querying workflow history, or visualizing DAGs.
 license: MIT
+compatibility: >
+  Requires Go 1.25+, CGO_ENABLED=1, and gcc or clang.
+  Runs as SSE daemon on macOS and Linux.
+  Linux: cgroups v2 for process isolation. macOS: timeout-only fallback.
 metadata:
   version: "1.2.0"
-  transport: sse
-  openclaw:
-    emoji: "⚙️"
-    os: ["darwin", "linux"]
-    user-invocable: true
-    repository: "https://github.com/rendis/opcode"
-    primaryEnv: "OPCODE_VAULT_KEY"
-    requires:
-      bins: ["go"]
-      anyBins: ["gcc", "clang"]
-      env: ["OPCODE_VAULT_KEY"]
-    install:
-      - type: go
-        package: github.com/rendis/opcode/cmd/opcode
+  transport: "sse"
+  author: "rendis"
+  repository: "https://github.com/rendis/opcode"
+  primary-env: "OPCODE_VAULT_KEY"
+  platforms: "darwin linux"
+  requires-bins: "go gcc|clang"
+  openclaw-emoji: "⚙️"
+  openclaw-os: "darwin linux"
+  openclaw-user-invocable: "true"
+  openclaw-install-type: "go"
+  openclaw-install-package: "github.com/rendis/opcode/cmd/opcode"
 ---
 
 # OPCODE
 
-Workflow orchestration engine for AI agents. Runs as a persistent SSE daemon — 1 server, N agents, 1 database. Workflows are JSON-defined DAGs executed level-by-level with automatic parallelism. Communication happens via 6 MCP tools over SSE (JSON-RPC). Includes a built-in web panel for multi-agent monitoring and management.
+Workflow orchestration engine for AI agents. Persistent SSE daemon -- 1 server, N agents, 1 database. Workflows are JSON-defined DAGs executed level-by-level with automatic parallelism. Communication via 6 MCP tools over SSE (JSON-RPC).
 
 **Token economy**: define a template once, execute it unlimited times for free (no re-reasoning). Reasoning nodes store decisions as events and never replay them.
 
@@ -44,96 +45,27 @@ Workflow orchestration engine for AI agents. Runs as a persistent SSE daemon —
 | List workflows, events, or templates | opcode.query   |
 | Visualize a workflow DAG             | opcode.diagram |
 
-## Prerequisites
+## Quick Start
 
-- **Go 1.25+** (required)
-- **CGO enabled** (`CGO_ENABLED=1`) — required by embedded libSQL (go-libsql)
-- **C compiler** — `gcc` or `clang` for CGO compilation
-
-## Installation
+Install:
 
 ```bash
 go install github.com/rendis/opcode/cmd/opcode@latest
 ```
 
-Installs the `opcode` binary to `$GOBIN` (default: `$GOPATH/bin`). Ensure it's in your `PATH`.
-
-## Running
-
-OPCODE runs as a **persistent SSE daemon**. 1 server, N agents, 1 database. Agents connect via HTTP.
-
-### Configuration
-
-Data directory: `~/.opcode/` (DB, settings, pidfile). Created automatically.
-
-First-time setup (installs config and starts daemon):
+First-time setup (writes config and starts daemon):
 
 ```bash
 opcode install --listen-addr :4100 --vault-key "my-passphrase"
 ```
 
-`--vault-key` is memory-only (not persisted). For production, set `OPCODE_VAULT_KEY` env var.
+Restart after stop: `OPCODE_VAULT_KEY="my-passphrase" opcode`
 
-Writes `~/.opcode/settings.json`, downloads [`mermaid-ascii`](https://github.com/AlexanderGrooff/mermaid-ascii) to `~/.opcode/bin/` for enhanced ASCII diagrams, and starts the daemon. All settings overridable via env vars (`OPCODE_LISTEN_ADDR`, `OPCODE_DB_PATH`, etc.).
-
-| Setting       | Default                 | Env override         | Description                                 |
-| ------------- | ----------------------- | -------------------- | ------------------------------------------- |
-| `listen_addr` | `:4100`                 | `OPCODE_LISTEN_ADDR` | TCP listen address                          |
-| `base_url`    | `http://localhost:4100` | `OPCODE_BASE_URL`    | Public base URL for SSE                     |
-| `db_path`     | `~/.opcode/opcode.db`   | `OPCODE_DB_PATH`     | Path to embedded libSQL database            |
-| `log_level`   | `info`                  | `OPCODE_LOG_LEVEL`   | `debug`, `info`, `warn`, `error`            |
-| `pool_size`   | `10`                    | `OPCODE_POOL_SIZE`   | Worker pool size                            |
-| `panel`       | `false`                 | `OPCODE_PANEL`       | Enable web panel (`true`/`1`)               |
-| _(env only)_  | _(empty)_               | `OPCODE_VAULT_KEY`   | Passphrase for secret vault (never in JSON) |
-
-> **Security**: Never put `OPCODE_VAULT_KEY` in `settings.json`. Use env vars or your platform's secrets manager. The passphrase derives the AES-256 encryption key via PBKDF2.
-
-If the process stops, restart with:
-
-```bash
-OPCODE_VAULT_KEY="my-passphrase" opcode
-```
-
-`install` is only needed once. Subsequent restarts use `opcode` directly with the env var.
-
-### Subcommands
-
-| Command           | Description                                            |
-| ----------------- | ------------------------------------------------------ |
-| `opcode`          | Start SSE daemon (same as `opcode serve`)              |
-| `opcode serve`    | Start SSE daemon explicitly                            |
-| `opcode install`  | Write settings.json, SIGHUP running server or start    |
-| `opcode update`   | Self-update (GitHub releases → `go install` fallback)  |
-| `opcode version`  | Print embedded version (default `dev`)                 |
-
-### Hot-Reload via SIGHUP
-
-Running `opcode install` with a server already running sends SIGHUP to reload configuration without restarting. You can also send it manually: `kill -HUP $(cat ~/.opcode/opcode.pid)`.
-
-| Setting      | Hot-Reload | Notes                  |
-| ------------ | ---------- | ---------------------- |
-| `panel`      | YES        | Mux swapped atomically |
-| `log_level`  | YES        | LevelVar.Set()         |
-| `listen_addr`| NO         | Needs listener rebind  |
-| `base_url`   | NO         | SSEServer constructed  |
-| `db_path`    | NO         | Store opened at startup|
-| `pool_size`  | NO         | Pool sized at startup  |
-
-### Building with Version
-
-```bash
-make build          # embeds git tag/commit as version
-./opcode version    # prints e.g. "v1.0.0" or "abc1234-dirty"
-```
-
-Without `make`, `go build` works normally (version = `dev`).
-
-### MCP Client Configuration
-
-Connect to the running daemon via SSE URL:
+MCP client configuration:
 
 ```json
 {
+  "mcpServers": {
   "mcpServers": {
     "opcode": {
       "type": "sse",
@@ -143,76 +75,33 @@ Connect to the running daemon via SSE URL:
 }
 ```
 
-### Agent Identity
+Each agent self-identifies via `agent_id` in tool calls. Opcode auto-registers unknown agents. Choose a stable ID per agent (e.g., `"content-writer"`, `"deploy-bot"`).
 
-Each agent self-identifies via the `agent_id` parameter in tool calls. Opcode auto-registers unknown agents on first use. Choose a stable, unique ID per agent (e.g., `"content-writer"`, `"deploy-bot"`). Use `opcode.query` with `filter.agent_id` to see only your workflows.
+Workflows survive restarts. On startup, orphaned `active` workflows become `suspended`. Query with `opcode.query({ "resource": "workflows", "filter": { "status": "suspended" } })`, then resume or cancel via `opcode.signal`.
 
-### Startup Sequence
-
-1. Writes pidfile to `~/.opcode/opcode.pid`
-2. Loads config from `~/.opcode/settings.json` (env vars override)
-3. Creates data directory, opens/creates libSQL database, runs migrations
-4. Suspends orphaned `active` workflows (emits `workflow_interrupted`)
-5. Initializes secret vault (if `OPCODE_VAULT_KEY` set)
-6. Registers 24 built-in actions
-7. Starts cron scheduler (recovers missed jobs)
-8. Registers SIGHUP handler for config hot-reload
-9. Begins listening for MCP JSON-RPC over SSE (+ web panel if `panel` enabled) on same port
-10. Shuts down gracefully on SIGTERM/SIGINT (10s timeout), removes pidfile
-
-### Recovery
-
-Workflows survive process restarts. On startup, opcode transitions orphaned `active` workflows to `suspended` and recovers missed cron jobs.
-
-Find interrupted workflows:
-
-```plaintext
-opcode.query({ "resource": "workflows", "filter": { "status": "suspended" } })
-```
-
-Inspect via `opcode.status`, then resume or cancel with `opcode.signal`.
-
-### Security Model
-
-Built-in actions respect `ResourceLimits` configured at startup:
-
-| Control        | Description                                                                                                |
-| -------------- | ---------------------------------------------------------------------------------------------------------- |
-| **Filesystem** | `DenyPaths` / `ReadOnlyPaths` / `WritablePaths` restrict file access. Symlink resolution prevents escapes. |
-| **Shell**      | Linux: cgroups v2 (memory, CPU, PID namespace). macOS: timeout-only fallback.                              |
-| **HTTP**       | `MaxResponseBody` (10 MB) and `DefaultTimeout` (30 s).                                                     |
-
-**Defaults are permissive** (no path deny-lists, no network restrictions). For production:
-
-- Set `DenyPaths` for sensitive directories (`/etc/shadow`, `~/.ssh`)
-- Set `WritablePaths` to constrain write scope
-- Run the opcode process under a restricted OS user
-- Use a network proxy/firewall for HTTP egress control
-- Treat `OPCODE_VAULT_KEY` as root-equivalent for stored secrets
-
-Crypto, assert, and workflow actions perform no I/O beyond the opcode database.
+See [operations.md](references/operations.md) for full configuration, subcommands, SIGHUP hot-reload, security model, web panel, and benchmarks.
 
 ## MCP Tools
 
 ### opcode.define
 
-Register a reusable workflow template. Version auto-increments (v1, v2, v3...).
+Registers a reusable workflow template. Version auto-increments (v1, v2, v3...).
 
-| Param           | Type   | Required | Description                       |
-| --------------- | ------ | -------- | --------------------------------- |
-| `name`          | string | yes      | Template name                     |
-| `definition`    | object | yes      | Workflow definition (see below)   |
-| `agent_id`      | string | yes      | Defining agent ID                 |
-| `description`   | string | no       | Template description              |
-| `input_schema`  | object | no       | JSON Schema for input validation  |
-| `output_schema` | object | no       | JSON Schema for output validation |
-| `triggers`      | object | no       | Trigger configuration             |
+| Param           | Type   | Required | Description                                                                                      |
+| --------------- | ------ | -------- | ------------------------------------------------------------------------------------------------ |
+| `name`          | string | yes      | Template name                                                                                    |
+| `definition`    | object | yes      | Workflow definition (see below)                                                                  |
+| `agent_id`      | string | yes      | Defining agent ID                                                                                |
+| `description`   | string | no       | Template description                                                                             |
+| `input_schema`  | object | no       | JSON Schema for input validation                                                                 |
+| `output_schema` | object | no       | JSON Schema for output validation                                                                |
+| `triggers`      | object | no       | Trigger config (see [workflow-schema.md](references/workflow-schema.md#triggers-template-level)) |
 
 **Returns**: `{ "name": "...", "version": "v1" }`
 
 ### opcode.run
 
-Execute a workflow from a registered template.
+Executes a workflow from a registered template.
 
 | Param           | Type   | Required | Description               |
 | --------------- | ------ | -------- | ------------------------- |
@@ -240,7 +129,7 @@ If `status` is `"suspended"`, call `opcode.status` to see `pending_decisions`.
 
 ### opcode.status
 
-Get workflow execution status.
+Gets workflow execution status.
 
 | Param         | Type   | Required | Description       |
 | ------------- | ------ | -------- | ----------------- |
@@ -272,7 +161,7 @@ Workflow statuses: `pending`, `active`, `suspended`, `completed`, `failed`, `can
 
 ### opcode.signal
 
-Send a signal to a suspended workflow.
+Sends a signal to a suspended workflow.
 
 | Param         | Type   | Required | Description                                       |
 | ------------- | ------ | -------- | ------------------------------------------------- |
@@ -298,7 +187,7 @@ Send a signal to a suspended workflow.
 
 ### opcode.query
 
-Query workflows, events, or templates.
+Queries workflows, events, or templates.
 
 | Param      | Type   | Required | Description                          |
 | ---------- | ------ | -------- | ------------------------------------ |
@@ -315,11 +204,11 @@ Query workflows, events, or templates.
 
 Note: event queries require either `event_type` or `workflow_id` in filter.
 
-**Returns**: `{ "<resource>": [...] }` — results wrapped in object keyed by resource type.
+**Returns**: `{ "<resource>": [...] }` -- results wrapped in object keyed by resource type.
 
 ### opcode.diagram
 
-Generate a visual DAG diagram from a template or running workflow.
+Generates a visual DAG diagram from a template or running workflow.
 
 | Param            | Type   | Required | Description                                                |
 | ---------------- | ------ | -------- | ---------------------------------------------------------- |
@@ -331,37 +220,15 @@ Generate a visual DAG diagram from a template or running workflow.
 
 \* One of `template_name` or `workflow_id` required.
 
-**Use cases**:
+- `template_name` -- preview DAG structure before execution
+- `workflow_id` -- visualize with live step status
+- `format: "ascii"` -- CLI-friendly text with box-drawing characters
+- `format: "mermaid"` -- markdown-embeddable flowchart syntax
+- `format: "image"` -- base64-encoded PNG for visual channels
 
-- `template_name` — preview DAG structure before execution
-- `workflow_id` — visualize with live step status (completed, running, suspended, pending)
-- `format: "ascii"` — CLI-friendly text output with box-drawing characters
-- `format: "mermaid"` — markdown-embeddable flowchart syntax
-- `format: "image"` — base64-encoded PNG for visual channels (Telegram, WhatsApp, Slack)
-
-**Returns**: `{ "format": "ascii", "diagram": "..." }` — diagram content as text (ascii/mermaid) or base64 PNG (image).
-
-## Web Panel
-
-The daemon can serve a web management panel at the same port as MCP SSE (default `http://localhost:4100`). Enable with `--panel` flag or `OPCODE_PANEL=true` env var. Can be toggled at runtime via SIGHUP.
-
-| Page            | Features                                                  |
-| --------------- | --------------------------------------------------------- |
-| Dashboard       | System counters, per-agent table, pending decisions, feed |
-| Workflows       | Filter by status/agent, pagination, cancel, re-run        |
-| Workflow Detail | Live DAG diagram, step states, events timeline            |
-| Templates       | List, create via JSON paste (auto-versions), definition   |
-| Template Detail | Version selector, Mermaid diagram preview                 |
-| Decisions       | Pending queue, resolve/reject forms with context          |
-| Scheduler       | Cron job CRUD, enable/disable, run history                |
-| Events          | Event log filtered by workflow and/or type                |
-| Agents          | Registered agents with type and last-seen                 |
-
-Live updates via SSE — dashboard and workflow detail pages auto-refresh on new events.
+**Returns**: `{ "format": "ascii", "diagram": "..." }`
 
 ## Workflow Definition
-
-Durations use Go format: `500ms`, `30s`, `5m`, `1h30m`.
 
 ```json
 {
@@ -381,7 +248,7 @@ Durations use Go format: `500ms`, `30s`, `5m`, `1h30m`.
 | `steps`       | StepDefinition[] | yes      | Workflow steps                                    |
 | `inputs`      | object           | no       | Input parameters (supports `${{}}`)               |
 | `context`     | object           | no       | Workflow context, accessible via `${{context.*}}` |
-| `timeout`     | string           | no       | Workflow deadline (e.g.,`"5m"`, `"1h"`)           |
+| `timeout`     | string           | no       | Workflow deadline (e.g., `"5m"`, `"1h"`)          |
 | `on_timeout`  | string           | no       | `fail` (default), `suspend`, `cancel`             |
 | `on_complete` | StepDefinition   | no       | Hook step after completion                        |
 | `on_error`    | StepDefinition   | no       | Hook step on workflow failure                     |
@@ -404,7 +271,7 @@ Durations use Go format: `500ms`, `30s`, `5m`, `1h30m`.
 }
 ```
 
-`type` defaults to `action`. The `config` field varies by type. See [workflow-schema.md](references/workflow-schema.md) for all config blocks.
+`type` defaults to `action`. See [workflow-schema.md](references/workflow-schema.md) for all config blocks.
 
 ## Step Types
 
@@ -463,7 +330,10 @@ Executes branches concurrently.
   "type": "parallel",
   "config": {
     "mode": "all",
-    "branches": [ [{ "id": "a", "action": "http.get", "params": {...} }], [{ "id": "b", "action": "http.get", "params": {...} }] ]
+    "branches": [
+      [{ "id": "a", "action": "http.get", "params": {...} }],
+      [{ "id": "b", "action": "http.get", "params": {...} }]
+    ]
   }
 }
 ```
@@ -541,18 +411,9 @@ See [actions.md](references/actions.md) for full parameter specs of all 25 actio
 
 ## Scripting with shell.exec
 
-`shell.exec` supports any language (Bash, Python, Node, Go, etc.). Scripts receive input via **stdin** and produce output via **stdout**. JSON stdout is **auto-parsed** — access fields directly with `${{steps.cmd.output.stdout.field}}`.
+`shell.exec` auto-parses JSON stdout. Convention: stdin=JSON, stdout=JSON, stderr=errors, non-zero exit=failure. Use `stdout_raw` for unprocessed text.
 
-| Language | Command   | Args                  | Boilerplate                                                 |
-| -------- | --------- | --------------------- | ----------------------------------------------------------- |
-| Bash     | `bash`    | `["script.sh"]`       | `set -euo pipefail; input=$(cat -)`                         |
-| Python   | `python3` | `["script.py"]`       | `json.load(sys.stdin)` -> `json.dump(result, sys.stdout)`   |
-| Node     | `node`    | `["script.js"]`       | Read stdin stream ->`JSON.parse` -> `JSON.stringify`        |
-| Go       | `go`      | `["run","script.go"]` | `json.NewDecoder(os.Stdin)` -> `json.NewEncoder(os.Stdout)` |
-
-**Convention**: stdin=JSON, stdout=JSON, stderr=errors, non-zero exit=failure. Use `stdout_raw` for unprocessed text.
-
-See [patterns.md](references/patterns.md#10-scripting-with-shellexec) for full templates.
+See [patterns.md](references/patterns.md#10-scripting-with-shellexec) for language-specific templates (Bash, Python, Node, Go).
 
 ## Reasoning Node Lifecycle
 
@@ -590,3 +451,9 @@ See [patterns.md](references/patterns.md) for full JSON examples: linear pipelin
 Backoff: `none`, `linear`, `exponential`, `constant`. Non-retryable errors (validation, permission, assertion) are never retried.
 
 See [error-handling.md](references/error-handling.md) for circuit breakers, timeout interactions, error codes.
+
+## Performance
+
+10-step parallel workflows complete in ~50µs, 500-step in ~2.4ms. The event store sustains ~15k appends/sec with <12% drop under 100 concurrent writers. Worker pool overhead is ~0.85µs/task (>1M tasks/sec at any pool size).
+
+Full benchmark charts, per-scenario breakdowns, and methodology: [`docs/benchmarks.md`](../../docs/benchmarks.md).

@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 320" width="600" height="320">
+  <rect width="600" height="320" fill="#0d1117" rx="8"/>
+  <text x="300" y="26" text-anchor="middle" fill="#e6edf3" font-family="system-ui,-apple-system,sans-serif" font-size="14" font-weight="600">DAG Execution — Parallel Steps</text>
+  <text x="300" y="44" text-anchor="middle" fill="#8b949e" font-family="system-ui,-apple-system,sans-serif" font-size="11">Time to execute a full workflow with N independent steps (lower is better)</text>
+  <line x1="64" y1="250" x2="536" y2="250" stroke="#30363d" stroke-width="1"/>
+  <text x="58" y="254" text-anchor="end" fill="#8b949e" font-family="system-ui,-apple-system,sans-serif" font-size="10">0</text>
+  <line x1="64" y1="203" x2="536" y2="203" stroke="#30363d" stroke-width="1"/>
+  <text x="58" y="207" text-anchor="end" fill="#8b949e" font-family="system-ui,-apple-system,sans-serif" font-size="10">1.2k</text>
+  <line x1="64" y1="155" x2="536" y2="155" stroke="#30363d" stroke-width="1"/>
+  <text x="58" y="159" text-anchor="end" fill="#8b949e" font-family="system-ui,-apple-system,sans-serif" font-size="10">2.5k</text>
+  <line x1="64" y1="108" x2="536" y2="108" stroke="#30363d" stroke-width="1"/>
+  <text x="58" y="112" text-anchor="end" fill="#8b949e" font-family="system-ui,-apple-system,sans-serif" font-size="10">3.8k</text>
+  <line x1="64" y1="60" x2="536" y2="60" stroke="#30363d" stroke-width="1"/>
+  <text x="58" y="64" text-anchor="end" fill="#8b949e" font-family="system-ui,-apple-system,sans-serif" font-size="10">5.0k</text>
+  <rect x="76" y="249" width="80" height="1" fill="#1a5276" rx="3"/>
+  <text x="116" y="243" text-anchor="middle" fill="#e6edf3" font-family="system-ui,-apple-system,sans-serif" font-size="11" font-weight="500">49.8</text>
+  <text x="116" y="266" text-anchor="middle" fill="#8b949e" font-family="system-ui,-apple-system,sans-serif" font-size="10">10 steps</text>
+  <rect x="168" y="241" width="80" height="9" fill="#1a5276" rx="3"/>
+  <text x="208" y="235" text-anchor="middle" fill="#e6edf3" font-family="system-ui,-apple-system,sans-serif" font-size="11" font-weight="500">243.6</text>
+  <text x="208" y="266" text-anchor="middle" fill="#8b949e" font-family="system-ui,-apple-system,sans-serif" font-size="10">50 steps</text>
+  <rect x="260" y="233" width="80" height="17" fill="#1a5276" rx="3"/>
+  <text x="300" y="227" text-anchor="middle" fill="#e6edf3" font-family="system-ui,-apple-system,sans-serif" font-size="11" font-weight="500">451.8</text>
+  <text x="300" y="266" text-anchor="middle" fill="#8b949e" font-family="system-ui,-apple-system,sans-serif" font-size="10">100 steps</text>
+  <rect x="352" y="217" width="80" height="33" fill="#1a5276" rx="3"/>
+  <text x="392" y="211" text-anchor="middle" fill="#e6edf3" font-family="system-ui,-apple-system,sans-serif" font-size="11" font-weight="500">883.2</text>
+  <text x="392" y="266" text-anchor="middle" fill="#8b949e" font-family="system-ui,-apple-system,sans-serif" font-size="10">200 steps</text>
+  <rect x="444" y="159" width="80" height="91" fill="#1a5276" rx="3"/>
+  <text x="484" y="153" text-anchor="middle" fill="#e6edf3" font-family="system-ui,-apple-system,sans-serif" font-size="11" font-weight="500">2.4k</text>
+  <text x="484" y="266" text-anchor="middle" fill="#8b949e" font-family="system-ui,-apple-system,sans-serif" font-size="10">500 steps</text>
+  <text x="300" y="312" text-anchor="middle" fill="#6e7681" font-family="system-ui,-apple-system,sans-serif" font-size="10">µs/workflow</text>
+</svg>

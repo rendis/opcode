@@ -13,7 +13,7 @@ import (
 	"github.com/rendis/opcode/pkg/schema"
 )
 
-// LibSQLStore implements the Store interface using libSQL (embedded SQLite fork).
+// LibSQLStore implements the Store interface using libSQL (SQLite-compatible embedded database).
 type LibSQLStore struct {
 	db *sql.DB
 }

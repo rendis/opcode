@@ -358,7 +358,18 @@ Full define -> run -> status -> signal -> status flow:
 
 ## 10. Scripting with shell.exec
 
-`shell.exec` auto-parses JSON stdout, so scripts that output JSON can chain with `${{steps.X.output.stdout.field}}`.
+`shell.exec` supports any language. Scripts receive input via **stdin** and produce output via **stdout**. JSON stdout is **auto-parsed**.
+
+**Convention**: stdin=JSON, stdout=JSON, stderr=errors, non-zero exit=failure. Use `stdout_raw` for unprocessed text.
+
+| Language | Command   | Args                  | Boilerplate                                                 |
+| -------- | --------- | --------------------- | ----------------------------------------------------------- |
+| Bash     | `bash`    | `["script.sh"]`       | `set -euo pipefail; input=$(cat -)`                         |
+| Python   | `python3` | `["script.py"]`       | `json.load(sys.stdin)` -> `json.dump(result, sys.stdout)`   |
+| Node     | `node`    | `["script.js"]`       | Read stdin stream -> `JSON.parse` -> `JSON.stringify`       |
+| Go       | `go`      | `["run","script.go"]` | `json.NewDecoder(os.Stdin)` -> `json.NewEncoder(os.Stdout)` |
+
+Scripts that output JSON can chain with `${{steps.X.output.stdout.field}}`.
 
 ### Bash
 

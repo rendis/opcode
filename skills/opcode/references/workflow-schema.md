@@ -226,6 +226,75 @@ For use with `opcode.query` resource `events` filter `event_type`:
 
 **Flow control**: `condition_evaluated`, `loop_iter_started`, `loop_iter_completed`, `loop_completed`, `parallel_started`, `parallel_completed`, `wait_started`, `wait_completed`
 
+## Triggers (Template-level)
+
+The `triggers` field in `opcode.define` stores trigger metadata on the template. Currently used as a storage placeholder for cron/webhook configuration. Scheduled jobs are created separately via the Store API / web panel.
+
+```json
+{
+  "triggers": {
+    "cron": [
+      {
+        "name": "daily-cleanup",
+        "expression": "0 2 * * *",
+        "enabled": true,
+        "params": { "retention_days": 30 }
+      }
+    ]
+  }
+}
+```
+
+### ScheduledJob
+
+Cron jobs are the primary trigger implementation. Managed via web panel (Scheduler page) or Store API.
+
+```json
+{
+  "id": "uuid",
+  "template_name": "my-template",
+  "template_version": "v1",
+  "cron_expression": "0 * * * *",
+  "params": { "key": "value" },
+  "agent_id": "bot-1",
+  "enabled": true,
+  "last_run_at": "RFC3339",
+  "next_run_at": "RFC3339",
+  "last_run_status": "completed"
+}
+```
+
+| Field              | Type   | Required | Description                   |
+| ------------------ | ------ | -------- | ----------------------------- |
+| `id`               | string | auto     | UUID, auto-generated          |
+| `template_name`    | string | yes      | Template to execute           |
+| `template_version` | string | no       | Version (default: latest)     |
+| `cron_expression`  | string | yes      | Standard 5-field Unix cron    |
+| `params`           | object | no       | Input parameters for each run |
+| `agent_id`         | string | yes      | Agent identity for executions |
+| `enabled`          | bool   | yes      | Whether job is active         |
+| `last_run_at`      | string | auto     | Last execution timestamp      |
+| `next_run_at`      | string | auto     | Next scheduled execution      |
+| `last_run_status`  | string | auto     | Status of last run            |
+
+### Cron Expression Format
+
+Standard 5-field Unix cron (via `robfig/cron` v3):
+
+```plaintext
+┌───────── minute (0-59)
+│ ┌─────── hour (0-23)
+│ │ ┌───── day of month (1-31)
+│ │ │ ┌─── month (1-12)
+│ │ │ │ ┌─ day of week (0-6, Sun=0)
+│ │ │ │ │
+* * * * *
+```
+
+Examples: `*/15 * * * *` (every 15 min), `0 2 * * *` (daily 2am), `0 * * * *` (hourly).
+
+The scheduler ticks every 60 seconds, executes due jobs, and recovers missed jobs on startup via `RecoverMissed()`. Concurrent executions of the same job are deduplicated.
+
 ## Real-time Notifications
 
 Use `workflow.notify` to push notifications to the agent at any point in the workflow. The agent is identified by the workflow's `agent_id`. If the agent is not connected via SSE, the step completes without error (best-effort).
@@ -233,11 +302,19 @@ Use `workflow.notify` to push notifications to the agent at any point in the wor
 ```json
 {
   "steps": [
-    { "id": "fetch", "action": "http.get", "params": { "url": "https://api.example.com/data" } },
-    { "id": "notify-done", "action": "workflow.notify", "params": {
+    {
+      "id": "fetch",
+      "action": "http.get",
+      "params": { "url": "https://api.example.com/data" }
+    },
+    {
+      "id": "notify-done",
+      "action": "workflow.notify",
+      "params": {
         "message": "Data fetch complete",
         "data": "${{steps.fetch.output}}"
-      }, "depends_on": ["fetch"]
+      },
+      "depends_on": ["fetch"]
     }
   ]
 }
@@ -248,10 +325,18 @@ Scheduled workflow example -- notify the agent on failure:
 ```json
 {
   "steps": [
-    { "id": "check", "action": "http.get", "params": { "url": "https://api.example.com/health" } },
-    { "id": "alert", "action": "workflow.notify", "params": {
+    {
+      "id": "check",
+      "action": "http.get",
+      "params": { "url": "https://api.example.com/health" }
+    },
+    {
+      "id": "alert",
+      "action": "workflow.notify",
+      "params": {
         "message": "Health check failed: ${{steps.check.output.status_code}}"
-      }, "depends_on": ["check"],
+      },
+      "depends_on": ["check"],
       "condition": "${{steps.check.output.status_code != 200}}"
     }
   ]

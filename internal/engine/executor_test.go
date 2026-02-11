@@ -1476,6 +1476,65 @@ func TestExecutor_ReasoningStep_RichContext(t *testing.T) {
 	assert.Equal(t, "staging", accum["env"])
 }
 
+func TestExecutor_ReasoningStep_DataInjectBarePaths(t *testing.T) {
+	te := newTestEnv()
+
+	// Register an action that produces structured output.
+	te.registry.Register(&mockAction{
+		name: "fetch",
+		execFn: func(_ context.Context, _ actions.ActionInput) (*actions.ActionOutput, error) {
+			return &actions.ActionOutput{Data: json.RawMessage(`{"status_code":200,"body":"ok"}`)}, nil
+		},
+	})
+
+	// Reasoning step with bare data_inject paths (no ${{}} wrappers).
+	reasoningConfig, _ := json.Marshal(schema.ReasoningConfig{
+		PromptContext: "Review fetch result",
+		DataInject: map[string]string{
+			"status":  "steps.s1.output.status_code",
+			"payload": "steps.s1.output.body",
+			"literal": "just a plain string",
+		},
+		Options: []schema.ReasoningOption{
+			{ID: "approve", Description: "Approve"},
+		},
+	})
+
+	wf := newWorkflow("wf-data-inject",
+		execActionStep("s1", "fetch"),
+		schema.StepDefinition{
+			ID:        "decide",
+			Type:      schema.StepTypeReasoning,
+			Config:    reasoningConfig,
+			DependsOn: []string{"s1"},
+		},
+	)
+	te.store.CreateWorkflow(context.Background(), wf)
+
+	result, err := te.executor.Run(context.Background(), wf, nil)
+	require.NoError(t, err)
+	assert.Equal(t, schema.WorkflowStatusSuspended, result.Status)
+
+	// Verify data_inject values were resolved.
+	decisions, _ := te.store.ListPendingDecisions(context.Background(), store.DecisionFilter{
+		WorkflowID: "wf-data-inject",
+		Status:     "pending",
+	})
+	require.Len(t, decisions, 1)
+
+	var ctx map[string]any
+	require.NoError(t, json.Unmarshal(decisions[0].Context, &ctx))
+
+	dataInject := ctx["data_inject"].(map[string]any)
+
+	// Bare path "steps.s1.output.status_code" should resolve (interpolator coerces to string).
+	assert.Equal(t, "200", dataInject["status"])
+	// Bare path "steps.s1.output.body" should resolve to "ok".
+	assert.Equal(t, "ok", dataInject["payload"])
+	// Non-path string should be kept as literal.
+	assert.Equal(t, "just a plain string", dataInject["literal"])
+}
+
 func TestExecutor_ReasoningStep_TargetAgent(t *testing.T) {
 	te := newTestEnv()
 

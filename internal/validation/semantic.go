@@ -3,6 +3,7 @@ package validation
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/rendis/opcode/pkg/schema"
 )
@@ -21,7 +22,7 @@ func validateSemantic(def *schema.WorkflowDefinition, lookup ActionLookup) *sche
 
 	for i := range def.Steps {
 		path := fmt.Sprintf("steps[%d]", i)
-		validateStepSemantic(&def.Steps[i], path, stepIDs, lookup, result)
+		validateStepSemantic(&def.Steps[i], path, stepIDs, lookup, def.Timeout, result)
 	}
 
 	if def.OnComplete != nil {
@@ -35,7 +36,7 @@ func validateSemantic(def *schema.WorkflowDefinition, lookup ActionLookup) *sche
 }
 
 // validateStepSemantic checks a single top-level step.
-func validateStepSemantic(step *schema.StepDefinition, path string, stepIDs map[string]bool, lookup ActionLookup, result *schema.ValidationResult) {
+func validateStepSemantic(step *schema.StepDefinition, path string, stepIDs map[string]bool, lookup ActionLookup, wfTimeout string, result *schema.ValidationResult) {
 	stepType := step.Type
 	if stepType == "" {
 		stepType = schema.StepTypeAction
@@ -84,6 +85,27 @@ func validateStepSemantic(step *schema.StepDefinition, path string, stepIDs map[
 	if step.Retry != nil && step.Retry.Max > 10 {
 		result.AddWarning(path+".retry.max", schema.ErrCodeValidation,
 			fmt.Sprintf("high retry count (%d) may cause excessive delays", step.Retry.Max))
+	}
+
+	// Warning: reasoning timeout exceeds step/workflow timeout.
+	if stepType == schema.StepTypeReasoning && len(step.Config) > 0 {
+		var cfg schema.ReasoningConfig
+		if err := json.Unmarshal(step.Config, &cfg); err == nil && cfg.Timeout != "" {
+			if rDur, err := time.ParseDuration(cfg.Timeout); err == nil {
+				if step.Timeout != "" {
+					if sDur, err := time.ParseDuration(step.Timeout); err == nil && rDur > sDur {
+						result.AddWarning(path+".config.timeout", schema.ErrCodeValidation,
+							fmt.Sprintf("reasoning timeout (%s) exceeds step timeout (%s); step context expires first, reasoning timeout only enforced on Resume()", cfg.Timeout, step.Timeout))
+					}
+				}
+				if wfTimeout != "" {
+					if wDur, err := time.ParseDuration(wfTimeout); err == nil && rDur > wDur {
+						result.AddWarning(path+".config.timeout", schema.ErrCodeValidation,
+							fmt.Sprintf("reasoning timeout (%s) exceeds workflow timeout (%s); workflow suspends before reasoning timeout fires", cfg.Timeout, wfTimeout))
+					}
+				}
+			}
+		}
 	}
 }
 

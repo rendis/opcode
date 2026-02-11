@@ -375,3 +375,104 @@ func TestSemantic_MultipleErrors(t *testing.T) {
 	result := validateSemantic(def, newMockLookup())
 	assert.Len(t, result.Errors, 3) // 2 bad actions + 1 bad depends_on
 }
+
+// --- Reasoning timeout warnings ---
+
+func TestSemantic_ReasoningTimeoutExceedsStepTimeout(t *testing.T) {
+	def := &schema.WorkflowDefinition{
+		Steps: []schema.StepDefinition{
+			{
+				ID:      "r1",
+				Type:    schema.StepTypeReasoning,
+				Timeout: "10s",
+				Config: mustJSON(schema.ReasoningConfig{
+					PromptContext: "decide",
+					Timeout:       "1h",
+				}),
+			},
+		},
+	}
+	result := validateSemantic(def, nil)
+	assert.True(t, result.Valid(), "warning should not invalidate")
+	require.Len(t, result.Warnings, 1)
+	assert.Contains(t, result.Warnings[0].Message, "reasoning timeout (1h) exceeds step timeout (10s)")
+	assert.Equal(t, "steps[0].config.timeout", result.Warnings[0].Path)
+}
+
+func TestSemantic_ReasoningTimeoutExceedsWorkflowTimeout(t *testing.T) {
+	def := &schema.WorkflowDefinition{
+		Timeout: "30s",
+		Steps: []schema.StepDefinition{
+			{
+				ID:   "r1",
+				Type: schema.StepTypeReasoning,
+				Config: mustJSON(schema.ReasoningConfig{
+					PromptContext: "decide",
+					Timeout:       "2h",
+				}),
+			},
+		},
+	}
+	result := validateSemantic(def, nil)
+	assert.True(t, result.Valid())
+	require.Len(t, result.Warnings, 1)
+	assert.Contains(t, result.Warnings[0].Message, "reasoning timeout (2h) exceeds workflow timeout (30s)")
+}
+
+func TestSemantic_ReasoningTimeoutExceedsBothTimeouts(t *testing.T) {
+	def := &schema.WorkflowDefinition{
+		Timeout: "1m",
+		Steps: []schema.StepDefinition{
+			{
+				ID:      "r1",
+				Type:    schema.StepTypeReasoning,
+				Timeout: "30s",
+				Config: mustJSON(schema.ReasoningConfig{
+					PromptContext: "decide",
+					Timeout:       "1h",
+				}),
+			},
+		},
+	}
+	result := validateSemantic(def, nil)
+	assert.True(t, result.Valid())
+	assert.Len(t, result.Warnings, 2, "should warn for both step and workflow timeout")
+}
+
+func TestSemantic_ReasoningTimeoutWithinLimits(t *testing.T) {
+	def := &schema.WorkflowDefinition{
+		Timeout: "2h",
+		Steps: []schema.StepDefinition{
+			{
+				ID:      "r1",
+				Type:    schema.StepTypeReasoning,
+				Timeout: "2h",
+				Config: mustJSON(schema.ReasoningConfig{
+					PromptContext: "decide",
+					Timeout:       "1h",
+				}),
+			},
+		},
+	}
+	result := validateSemantic(def, nil)
+	assert.True(t, result.Valid())
+	assert.Empty(t, result.Warnings, "no warning when reasoning timeout is within limits")
+}
+
+func TestSemantic_ReasoningNoTimeoutNoWarning(t *testing.T) {
+	def := &schema.WorkflowDefinition{
+		Timeout: "30s",
+		Steps: []schema.StepDefinition{
+			{
+				ID:   "r1",
+				Type: schema.StepTypeReasoning,
+				Config: mustJSON(schema.ReasoningConfig{
+					PromptContext: "decide",
+				}),
+			},
+		},
+	}
+	result := validateSemantic(def, nil)
+	assert.True(t, result.Valid())
+	assert.Empty(t, result.Warnings)
+}

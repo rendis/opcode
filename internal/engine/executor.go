@@ -1011,7 +1011,19 @@ func (e *executorImpl) executeReasoningStep(ctx context.Context, run *workflowRu
 					resolved[key] = expr // keep raw on error
 				}
 			} else {
-				resolved[key] = expr
+				// Auto-resolve bare namespace paths (e.g. "steps.fetch.output.body").
+				wrapped, _ := json.Marshal(fmt.Sprintf("${{ %s }}", expr))
+				val, err := e.interpolator.Resolve(ctx, wrapped, scope)
+				if err == nil {
+					var v any
+					if err := json.Unmarshal(val, &v); err == nil {
+						resolved[key] = v
+					} else {
+						resolved[key] = string(val)
+					}
+				} else {
+					resolved[key] = expr // not a valid path — keep as literal
+				}
 			}
 		}
 		ctxParams.ResolvedInjects = resolved

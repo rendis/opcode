@@ -37,3 +37,4 @@ CLAUDE.md
 /bin/
 /dist/
 .mcp.json
+gen-benchmarks

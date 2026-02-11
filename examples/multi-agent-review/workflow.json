@@ -1,0 +1,84 @@
+{
+  "name": "multi-agent-review",
+  "description": "Demonstrates two-agent coordination: researcher-agent runs analysis, reviewer-agent approves or rejects via targeted reasoning node.",
+  "category": "coordination",
+  "features": ["reasoning", "target_agent", "http.get", "workflow.log"],
+  "input_schema": {
+    "type": "object",
+    "required": ["data_url", "threshold"],
+    "properties": {
+      "data_url": {
+        "type": "string",
+        "format": "uri",
+        "description": "URL to fetch data from"
+      },
+      "threshold": {
+        "type": "number",
+        "default": 0.8,
+        "description": "Minimum score threshold for filtering"
+      }
+    }
+  },
+  "definition": {
+    "timeout": "4h",
+    "on_timeout": "suspend",
+    "steps": [
+      {
+        "id": "fetch-data",
+        "type": "action",
+        "action": "http.get",
+        "params": {
+          "url": "${{inputs.data_url}}"
+        }
+      },
+      {
+        "id": "analyze",
+        "type": "action",
+        "action": "expr.eval",
+        "depends_on": ["fetch-data"],
+        "params": {
+          "expression": "filter(steps['fetch-data'].output.body.items, {.score >= inputs.threshold})"
+        }
+      },
+      {
+        "id": "review-gate",
+        "type": "reasoning",
+        "depends_on": ["analyze"],
+        "config": {
+          "prompt_context": "You are the reviewer-agent. The researcher-agent has completed analysis. Review the filtered results and decide whether to approve publishing.",
+          "target_agent": "reviewer-agent",
+          "options": [
+            { "id": "approve", "description": "Results meet quality standards, approve for publishing" },
+            { "id": "reject", "description": "Results do not meet standards, reject" }
+          ],
+          "data_inject": {
+            "item_count": "steps.analyze.output.length",
+            "threshold": "inputs.threshold"
+          },
+          "timeout": "2h",
+          "fallback": "reject"
+        }
+      },
+      {
+        "id": "publish",
+        "type": "action",
+        "action": "http.post",
+        "depends_on": ["review-gate"],
+        "condition": "steps['review-gate'].output.choice == 'approve'",
+        "params": {
+          "url": "https://api.example.com/publish",
+          "body": "${{steps.analyze.output}}"
+        }
+      },
+      {
+        "id": "log-result",
+        "type": "action",
+        "action": "workflow.log",
+        "depends_on": ["review-gate"],
+        "params": {
+          "message": "Review completed. Decision: ${{steps['review-gate'].output.choice}}"
+        }
+      }
+    ]
+  }
+}
