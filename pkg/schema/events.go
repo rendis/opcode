@@ -40,6 +40,8 @@ const (
 	EventParallelCompleted  = "parallel_completed"
 	EventWaitStarted        = "wait_started"
 	EventWaitCompleted      = "wait_completed"
+
+	EventWorkflowInterrupted = "workflow_interrupted"
 )
 
 // WorkflowStatus represents the lifecycle state of a workflow.

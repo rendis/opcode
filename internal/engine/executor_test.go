@@ -220,6 +220,7 @@ func (m *mockStore) ListPendingDecisions(_ context.Context, filter store.Decisio
 
 func (m *mockStore) RegisterAgent(_ context.Context, _ *store.Agent) error    { return nil }
 func (m *mockStore) GetAgent(_ context.Context, _ string) (*store.Agent, error) { return nil, nil }
+func (m *mockStore) ListAgents(_ context.Context) ([]*store.Agent, error)       { return nil, nil }
 func (m *mockStore) UpdateAgentSeen(_ context.Context, _ string) error         { return nil }
 func (m *mockStore) StoreSecret(_ context.Context, _ string, _ []byte) error   { return nil }
 func (m *mockStore) GetSecret(_ context.Context, _ string) ([]byte, error)     { return nil, nil }

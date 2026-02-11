@@ -33,3 +33,4 @@ CLAUDE.md
 # Build
 /bin/
 /dist/
+.mcp.json

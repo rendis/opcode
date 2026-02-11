@@ -36,6 +36,7 @@ type Store interface {
 	RegisterAgent(ctx context.Context, agent *Agent) error
 	GetAgent(ctx context.Context, id string) (*Agent, error)
 	UpdateAgentSeen(ctx context.Context, id string) error
+	ListAgents(ctx context.Context) ([]*Agent, error)
 
 	// Secrets
 	StoreSecret(ctx context.Context, key string, value []byte) error

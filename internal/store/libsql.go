@@ -19,12 +19,21 @@ type LibSQLStore struct {
 }
 
 // NewLibSQLStore opens a libSQL database at the given path and returns a Store.
-// The path should be a file URI, e.g. "file:/path/to/db.db".
+// The path can be a bare filename (e.g. "opcode.db") or a URI ("file:/path/to/db.db").
+// Bare paths are automatically prefixed with "file:" for go-libsql compatibility.
 func NewLibSQLStore(dbPath string) (*LibSQLStore, error) {
+	if dbPath != ":memory:" &&
+		!strings.Contains(dbPath, "://") &&
+		!strings.HasPrefix(dbPath, "file:") {
+		dbPath = "file:" + dbPath
+	}
 	db, err := sql.Open("libsql", dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("open libsql: %w", err)
 	}
+	// Single connection serializes Go-level access. PRAGMAs (WAL, busy_timeout)
+	// are per-connection, so pooling would require per-connection init.
+	// Workflow DB operations are fast (ms) — single connection handles multi-agent load.
 	db.SetMaxOpenConns(1)
 
 	// Apply connection-level PRAGMAs. Some PRAGMAs return rows so we use QueryRow.
@@ -104,6 +113,31 @@ func (s *LibSQLStore) UpdateAgentSeen(ctx context.Context, id string) error {
 		return err
 	}
 	return checkRowsAffected(res, "agent", id)
+}
+
+func (s *LibSQLStore) ListAgents(ctx context.Context) ([]*Agent, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, name, type, metadata, created_at, last_seen_at FROM agents ORDER BY last_seen_at DESC NULLS LAST`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var agents []*Agent
+	for rows.Next() {
+		a := &Agent{}
+		var metadata sql.NullString
+		var lastSeen sql.NullTime
+		if err := rows.Scan(&a.ID, &a.Name, &a.Type, &metadata, &a.CreatedAt, &lastSeen); err != nil {
+			return nil, err
+		}
+		a.Metadata = jsonOrNil(metadata)
+		if lastSeen.Valid {
+			a.LastSeenAt = &lastSeen.Time
+		}
+		agents = append(agents, a)
+	}
+	return agents, rows.Err()
 }
 
 // --- Workflows ---
