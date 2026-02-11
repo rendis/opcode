@@ -27,8 +27,11 @@ coverage.txt
 .DS_Store
 Thumbs.db
 
-# Claude
+# Agents
 CLAUDE.md
+.claude
+.agents
+.agent
 
 # Build
 /bin/
