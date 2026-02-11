@@ -1,0 +1,20 @@
+{{define "event_row"}}
+<tr>
+    <td class="mono text-muted">{{.Sequence}}</td>
+    <td><span class="badge badge-secondary">{{.Type}}</span></td>
+    <td class="mono"><a href="/workflows/{{.WorkflowID}}">{{truncate .WorkflowID 8}}</a></td>
+    <td class="mono">{{if .StepID}}{{.StepID}}{{else}}&mdash;{{end}}</td>
+    <td class="mono">{{if .AgentID}}{{.AgentID}}{{else}}&mdash;{{end}}</td>
+    <td class="text-secondary">{{timeAgo .Timestamp}}</td>
+    <td>
+        {{if .Payload}}
+        <div class="expandable">
+            <span class="expandable-toggle">Payload</span>
+            <div class="expandable-body">
+                <div class="json-viewer">{{json .Payload}}</div>
+            </div>
+        </div>
+        {{else}}&mdash;{{end}}
+    </td>
+</tr>
+{{end}}

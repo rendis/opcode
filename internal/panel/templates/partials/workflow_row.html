@@ -1,0 +1,10 @@
+{{define "workflow_row"}}
+<tr class="clickable" data-href="/workflows/{{.ID}}">
+    <td class="mono">{{truncate .ID 8}}</td>
+    <td>{{if .Name}}{{.Name}}{{else}}{{.TemplateName}}{{end}}</td>
+    <td>{{.TemplateName}}{{if .TemplateVersion}} <span class="text-muted">{{.TemplateVersion}}</span>{{end}}</td>
+    <td class="mono">{{.AgentID}}</td>
+    <td><span class="badge {{statusBadge (printf "%s" .Status)}}">{{.Status}}</span></td>
+    <td class="text-secondary">{{timeAgo .CreatedAt}}</td>
+</tr>
+{{end}}

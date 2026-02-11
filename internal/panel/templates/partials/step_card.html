@@ -1,0 +1,25 @@
+{{define "step_card"}}
+<tr>
+    <td class="mono">{{.StepID}}</td>
+    <td><span class="badge {{statusBadge (printf "%s" .Status)}}">{{.Status}}</span></td>
+    <td class="text-secondary">
+        {{if gt .DurationMs 0}}{{.DurationMs}}ms{{else}}&mdash;{{end}}
+        {{if gt .DurationMs 0}}
+        <div class="timeline-bar">
+            <div class="fill {{printf "%s" .Status}}" style="width: 100%"></div>
+        </div>
+        {{end}}
+    </td>
+    <td class="text-secondary">{{if gt .RetryCount 0}}{{.RetryCount}}{{else}}&mdash;{{end}}</td>
+    <td>
+        <div class="expandable">
+            <span class="expandable-toggle">Show I/O</span>
+            <div class="expandable-body">
+                {{if .Input}}<div class="form-group"><label>Input</label><div class="json-viewer">{{json .Input}}</div></div>{{end}}
+                {{if .Output}}<div class="form-group"><label>Output</label><div class="json-viewer">{{json .Output}}</div></div>{{end}}
+                {{if .Error}}<div class="form-group"><label>Error</label><div class="json-viewer text-error">{{json .Error}}</div></div>{{end}}
+            </div>
+        </div>
+    </td>
+</tr>
+{{end}}

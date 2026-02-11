@@ -1,0 +1,96 @@
+{{define "base"}}<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{if .Title}}{{.Title}} &mdash; {{end}}Opcode</title>
+    <link rel="stylesheet" href="/static/css/pico.min.css">
+    <link rel="stylesheet" href="/static/css/panel.css">
+    <script src="/static/js/htmx.min.js"></script>
+    <script src="/static/js/htmx-sse.js"></script>
+    <script src="/static/js/mermaid.min.js"></script>
+    <script>mermaid.initialize({startOnLoad: true, theme: 'dark', themeVariables: {primaryColor: '#0f3460', primaryBorderColor: '#243b6a', primaryTextColor: '#e8e8e8', lineColor: '#6c7a9b', secondaryColor: '#1e2a4a', tertiaryColor: '#16213e'}});</script>
+</head>
+<body>
+    <nav class="sidebar">
+        <div class="sidebar-header">
+            <h2>Opcode</h2>
+            <div class="version">workflow orchestration</div>
+        </div>
+        <ul>
+            <li class="{{if eq .Active "dashboard"}}active{{end}}">
+                <a href="/"><span class="nav-icon">&#9632;</span> Dashboard</a>
+            </li>
+            <li class="{{if eq .Active "workflows"}}active{{end}}">
+                <a href="/workflows"><span class="nav-icon">&#10227;</span> Workflows</a>
+            </li>
+            <li class="{{if eq .Active "templates"}}active{{end}}">
+                <a href="/templates"><span class="nav-icon">&#9776;</span> Templates</a>
+            </li>
+            <li class="{{if eq .Active "decisions"}}active{{end}}">
+                <a href="/decisions"><span class="nav-icon">&#10067;</span> Decisions</a>
+            </li>
+            <li class="{{if eq .Active "scheduler"}}active{{end}}">
+                <a href="/scheduler"><span class="nav-icon">&#9200;</span> Scheduler</a>
+            </li>
+            <li class="{{if eq .Active "events"}}active{{end}}">
+                <a href="/events"><span class="nav-icon">&#9998;</span> Events</a>
+            </li>
+            <li class="{{if eq .Active "agents"}}active{{end}}">
+                <a href="/agents"><span class="nav-icon">&#9881;</span> Agents</a>
+            </li>
+        </ul>
+    </nav>
+    <main class="content">
+        {{template "content" .}}
+    </main>
+    <script>
+    document.addEventListener('click', function(e) {
+        var row = e.target.closest('tr.clickable');
+        if (row && row.dataset.href) {
+            window.location = row.dataset.href;
+        }
+    });
+    document.addEventListener('click', function(e) {
+        var toggle = e.target.closest('.expandable-toggle');
+        if (toggle) {
+            toggle.closest('.expandable').classList.toggle('open');
+        }
+    });
+    document.addEventListener('click', function(e) {
+        var tab = e.target.closest('.tab');
+        if (!tab) return;
+        var tabs = tab.closest('.tabs');
+        var container = tabs.parentElement;
+        tabs.querySelectorAll('.tab').forEach(function(t) { t.classList.remove('active'); });
+        tab.classList.add('active');
+        container.querySelectorAll('.tab-content').forEach(function(c) { c.classList.remove('active'); });
+        var target = container.querySelector('#' + tab.dataset.tab);
+        if (target) target.classList.add('active');
+    });
+    function confirmAction(msg, url, method) {
+        if (confirm(msg)) {
+            fetch(url, {method: method || 'POST', headers: {'Content-Type': 'application/json'}})
+                .then(function(r) { return r.json(); })
+                .then(function() { window.location.reload(); });
+        }
+    }
+    function resolveDecision(e, id) {
+        e.preventDefault();
+        var form = e.target;
+        fetch('/api/decisions/' + id + '/resolve', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                choice: form.choice.value,
+                reasoning: form.reasoning.value
+            })
+        }).then(function(r) {
+            if (r.ok) { window.location.reload(); }
+            else { r.json().then(function(d) { alert(d.error || 'Error resolving decision'); }); }
+        });
+        return false;
+    }
+    </script>
+</body>
+</html>{{end}}

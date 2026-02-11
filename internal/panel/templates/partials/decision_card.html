@@ -1,0 +1,43 @@
+{{define "decision_card"}}
+<div class="decision-card urgency-low" id="decision-{{.ID}}">
+    <div class="decision-header">
+        <span class="badge badge-warning">{{.Status}}</span>
+        {{if .TimeoutAt}}<span class="text-muted" style="font-size: 0.75rem;">Timeout: {{timeAgo .TimeoutAt}}</span>{{end}}
+    </div>
+    <div class="decision-prompt">Step: {{.StepID}}</div>
+    <div class="decision-meta">
+        <span>Workflow: <a href="/workflows/{{.WorkflowID}}">{{truncate .WorkflowID 8}}</a></span>
+        <span>Agent: {{if .TargetAgentID}}{{.TargetAgentID}}{{else}}{{.AgentID}}{{end}}</span>
+        <span>Waiting: {{timeAgo .CreatedAt}}</span>
+    </div>
+    {{if .Context}}
+    <div class="expandable">
+        <span class="expandable-toggle">Context</span>
+        <div class="expandable-body">
+            <div class="json-viewer">{{json .Context}}</div>
+        </div>
+    </div>
+    {{end}}
+    {{if .Options}}
+    <div class="expandable open">
+        <span class="expandable-toggle">Options</span>
+        <div class="expandable-body">
+            <div class="json-viewer">{{json .Options}}</div>
+        </div>
+    </div>
+    {{end}}
+    <form onsubmit="return resolveDecision(event, '{{.ID}}')" style="margin-top: 0.75rem;">
+        <div class="form-group">
+            <label>Choice</label>
+            <input type="text" name="choice" required placeholder="Enter your decision">
+        </div>
+        <div class="form-group">
+            <label>Reasoning (optional)</label>
+            <textarea name="reasoning" rows="2" placeholder="Why this choice?"></textarea>
+        </div>
+        <div class="flex justify-between items-center">
+            <button type="submit" class="btn btn-success btn-sm">Resolve</button>
+        </div>
+    </form>
+</div>
+{{end}}

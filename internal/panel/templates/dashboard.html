@@ -1,0 +1,91 @@
+{{define "content"}}
+<div class="page-header">
+    <h1>Dashboard</h1>
+</div>
+
+<!-- Stat counters -->
+<div class="stats-grid">
+    <div class="stat-card">
+        <div class="stat-icon active">&#9654;</div>
+        <div class="stat-info">
+            <span class="stat-value">{{.ActiveCount}}</span>
+            <span class="stat-label">Active</span>
+        </div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon suspended">&#9208;</div>
+        <div class="stat-info">
+            <span class="stat-value">{{.SuspendedCount}}</span>
+            <span class="stat-label">Suspended</span>
+        </div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon failed">&#10006;</div>
+        <div class="stat-info">
+            <span class="stat-value">{{.FailedCount}}</span>
+            <span class="stat-label">Failed</span>
+        </div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon completed">&#10003;</div>
+        <div class="stat-info">
+            <span class="stat-value">{{.CompletedToday}}</span>
+            <span class="stat-label">Completed Today</span>
+        </div>
+    </div>
+</div>
+
+<div class="dashboard-grid">
+    <!-- Pending Decisions + Activity -->
+    <div class="dashboard-split">
+        <div class="card">
+            <div class="section-header">
+                <h2>Pending Decisions<span class="count">{{len .Decisions}}</span></h2>
+                <a href="/decisions">View all &rarr;</a>
+            </div>
+            {{if .Decisions}}
+            <div class="card-body">
+                {{range .Decisions}}
+                <div class="activity-item">
+                    <div class="activity-dot suspended"></div>
+                    <div class="activity-content">
+                        <span class="event-type">{{.StepID}}</span>
+                        <span class="event-detail">
+                            &mdash; {{if .TargetAgentID}}{{.TargetAgentID}}{{else}}{{.AgentID}}{{end}}
+                        </span>
+                    </div>
+                    <span class="activity-time">{{timeAgo .CreatedAt}}</span>
+                </div>
+                {{end}}
+            </div>
+            {{else}}
+            <div class="empty-state">
+                <div class="empty-icon">&#10003;</div>
+                <p>No pending decisions</p>
+            </div>
+            {{end}}
+        </div>
+
+        <div class="card" hx-ext="sse" sse-connect="/sse/events">
+            <div class="section-header">
+                <h2>Recent Activity</h2>
+                <a href="/events">View all &rarr;</a>
+            </div>
+            {{if .RecentEvents}}
+            <div class="card-body" sse-swap="message" hx-swap="afterbegin">
+                <ul class="activity-feed">
+                    {{range .RecentEvents}}
+                    {{template "activity_item" .}}
+                    {{end}}
+                </ul>
+            </div>
+            {{else}}
+            <div class="empty-state">
+                <div class="empty-icon">&#9998;</div>
+                <p>No recent activity</p>
+            </div>
+            {{end}}
+        </div>
+    </div>
+</div>
+{{end}}

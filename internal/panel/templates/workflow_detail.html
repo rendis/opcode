@@ -1,0 +1,133 @@
+{{define "content"}}
+<div class="detail-header">
+    <h1>{{if .Workflow.Name}}{{.Workflow.Name}}{{else}}Workflow{{end}}</h1>
+    <span class="badge {{statusBadge (printf "%s" .Workflow.Status)}}">{{.Workflow.Status}}</span>
+    <div class="detail-meta">
+        <span>ID: <code>{{truncate .Workflow.ID 12}}</code></span>
+        <span>Agent: <code>{{.Workflow.AgentID}}</code></span>
+        {{if .Workflow.TemplateName}}<span>Template: {{.Workflow.TemplateName}} {{.Workflow.TemplateVersion}}</span>{{end}}
+        <span>Created: {{timeAgo .Workflow.CreatedAt}}</span>
+    </div>
+    <div class="detail-actions">
+        {{if or (eq (printf "%s" .Workflow.Status) "active") (eq (printf "%s" .Workflow.Status) "suspended")}}
+        <button class="btn btn-danger btn-sm" onclick="confirmAction('Cancel this workflow?', '/api/workflows/{{.Workflow.ID}}/cancel', 'POST')">Cancel</button>
+        {{end}}
+        <button class="btn btn-secondary btn-sm" onclick="confirmAction('Re-run this workflow with same parameters?', '/api/workflows/{{.Workflow.ID}}/rerun', 'POST')">Re-run</button>
+    </div>
+</div>
+
+<!-- Tabs -->
+<div>
+    <div class="tabs">
+        <button class="tab active" data-tab="tab-steps">Steps</button>
+        <button class="tab" data-tab="tab-events">Events</button>
+        <button class="tab" data-tab="tab-decisions">Decisions</button>
+    </div>
+
+    <!-- Steps tab -->
+    <div id="tab-steps" class="tab-content active" hx-ext="sse" sse-connect="/sse/workflows/{{.Workflow.ID}}">
+        {{if .Steps}}
+        <table>
+            <thead>
+                <tr>
+                    <th>Step ID</th>
+                    <th>Status</th>
+                    <th>Duration</th>
+                    <th>Retries</th>
+                    <th>Details</th>
+                </tr>
+            </thead>
+            <tbody>
+                {{range .Steps}}
+                <tr>
+                    <td class="mono">{{.StepID}}</td>
+                    <td><span class="badge {{statusBadge (printf "%s" .Status)}}">{{.Status}}</span></td>
+                    <td class="text-secondary">
+                        {{if gt .DurationMs 0}}{{.DurationMs}}ms{{else}}&mdash;{{end}}
+                        {{if gt .DurationMs 0}}
+                        <div class="timeline-bar">
+                            <div class="fill {{printf "%s" .Status}}" style="width: 100%"></div>
+                        </div>
+                        {{end}}
+                    </td>
+                    <td class="text-secondary">{{if gt .RetryCount 0}}{{.RetryCount}}{{else}}&mdash;{{end}}</td>
+                    <td>
+                        <div class="expandable">
+                            <span class="expandable-toggle">Show I/O</span>
+                            <div class="expandable-body">
+                                {{if .Input}}<div class="form-group"><label>Input</label><div class="json-viewer">{{json .Input}}</div></div>{{end}}
+                                {{if .Output}}<div class="form-group"><label>Output</label><div class="json-viewer">{{json .Output}}</div></div>{{end}}
+                                {{if .Error}}<div class="form-group"><label>Error</label><div class="json-viewer text-error">{{json .Error}}</div></div>{{end}}
+                            </div>
+                        </div>
+                    </td>
+                </tr>
+                {{end}}
+            </tbody>
+        </table>
+        {{else}}
+        <div class="empty-state">
+            <p>No steps recorded yet</p>
+        </div>
+        {{end}}
+    </div>
+
+    <!-- Events tab -->
+    <div id="tab-events" class="tab-content">
+        {{if .Events}}
+        <table>
+            <thead>
+                <tr>
+                    <th>Seq</th>
+                    <th>Type</th>
+                    <th>Step</th>
+                    <th>Agent</th>
+                    <th>Time</th>
+                    <th>Payload</th>
+                </tr>
+            </thead>
+            <tbody>
+                {{range .Events}}
+                <tr>
+                    <td class="mono text-muted">{{.Sequence}}</td>
+                    <td><span class="badge badge-secondary">{{.Type}}</span></td>
+                    <td class="mono">{{if .StepID}}{{.StepID}}{{else}}&mdash;{{end}}</td>
+                    <td class="mono">{{if .AgentID}}{{.AgentID}}{{else}}&mdash;{{end}}</td>
+                    <td class="text-secondary">{{timeAgo .Timestamp}}</td>
+                    <td>
+                        {{if .Payload}}
+                        <div class="expandable">
+                            <span class="expandable-toggle">Payload</span>
+                            <div class="expandable-body">
+                                <div class="json-viewer">{{json .Payload}}</div>
+                            </div>
+                        </div>
+                        {{else}}&mdash;{{end}}
+                    </td>
+                </tr>
+                {{end}}
+            </tbody>
+        </table>
+        {{else}}
+        <div class="empty-state">
+            <p>No events recorded</p>
+        </div>
+        {{end}}
+    </div>
+
+    <!-- Decisions tab -->
+    <div id="tab-decisions" class="tab-content">
+        {{if .Decisions}}
+        <div class="decisions-grid">
+            {{range .Decisions}}
+            {{template "decision_card" .}}
+            {{end}}
+        </div>
+        {{else}}
+        <div class="empty-state">
+            <p>No decisions for this workflow</p>
+        </div>
+        {{end}}
+    </div>
+</div>
+{{end}}

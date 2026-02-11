@@ -1,0 +1,46 @@
+{{define "content"}}
+<div class="detail-header">
+    <h1>{{.Name}}</h1>
+    <span class="badge badge-secondary">{{.Current.Version}}</span>
+    <div class="detail-meta">
+        {{if .Current.Description}}<span>{{.Current.Description}}</span>{{end}}
+        <span>Agent: <code>{{.Current.AgentID}}</code></span>
+        <span>Created: {{timeAgo .Current.CreatedAt}}</span>
+    </div>
+    <div class="detail-actions">
+        {{if gt (len .Versions) 1}}
+        <form method="get" action="/templates/{{.Name}}" class="flex items-center gap-sm">
+            <select name="version" onchange="this.form.submit()" style="margin:0; padding: 0.3rem 0.5rem; font-size: 0.8rem;">
+                {{range .Versions}}
+                <option value="{{.Version}}" {{if eq .Version $.Current.Version}}selected{{end}}>{{.Version}}</option>
+                {{end}}
+            </select>
+        </form>
+        {{end}}
+    </div>
+</div>
+
+<!-- Tabs -->
+<div>
+    <div class="tabs">
+        <button class="tab active" data-tab="tab-diagram">Diagram</button>
+        <button class="tab" data-tab="tab-definition">Definition</button>
+    </div>
+
+    <!-- Diagram tab -->
+    <div id="tab-diagram" class="tab-content active">
+        <div class="diagram-container">
+            <pre class="mermaid">
+graph TD
+    Start([Start]) --> End([End])
+            </pre>
+        </div>
+        <p class="text-muted mt-1" style="font-size: 0.78rem;">Diagram generated from workflow definition. Install the diagram package for richer rendering.</p>
+    </div>
+
+    <!-- Definition tab -->
+    <div id="tab-definition" class="tab-content">
+        <div class="json-viewer">{{.Definition}}</div>
+    </div>
+</div>
+{{end}}

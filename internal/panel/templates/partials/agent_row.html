@@ -1,0 +1,15 @@
+{{define "agent_row"}}
+<div class="agent-card">
+    <div class="agent-name">{{if .Name}}{{.Name}}{{else}}{{.ID}}{{end}}</div>
+    <div class="agent-type">{{.Type}}</div>
+    <div class="flex justify-between items-center">
+        <span class="mono text-muted" style="font-size: 0.75rem;">{{truncate .ID 12}}</span>
+        <span class="text-secondary" style="font-size: 0.78rem;">
+            {{if .LastSeenAt}}Last seen: {{timeAgo .LastSeenAt}}{{else}}Never seen{{end}}
+        </span>
+    </div>
+    <div style="margin-top: 0.75rem;">
+        <a href="/workflows?agent_id={{.ID}}" class="btn btn-secondary btn-sm">View Workflows</a>
+    </div>
+</div>
+{{end}}

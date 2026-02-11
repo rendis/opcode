@@ -1,0 +1,135 @@
+{{define "content"}}
+<div class="page-header">
+    <h1>Scheduler</h1>
+    <button class="btn btn-primary" onclick="document.getElementById('new-job-modal').classList.add('open')">New Job</button>
+</div>
+
+{{if .Jobs}}
+<table>
+    <thead>
+        <tr>
+            <th>ID</th>
+            <th>Template</th>
+            <th>Cron</th>
+            <th>Agent</th>
+            <th>Enabled</th>
+            <th>Last Run</th>
+            <th>Next Run</th>
+            <th>Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        {{range .Jobs}}
+        <tr>
+            <td class="mono">{{truncate .ID 8}}</td>
+            <td>{{.TemplateName}}{{if .TemplateVersion}} <span class="text-muted">{{.TemplateVersion}}</span>{{end}}</td>
+            <td class="mono">{{.CronExpression}}</td>
+            <td class="mono">{{.AgentID}}</td>
+            <td>
+                <label class="toggle">
+                    <input type="checkbox" {{if .Enabled}}checked{{end}}
+                        onchange="toggleJob('{{.ID}}', this.checked)">
+                    <span class="slider"></span>
+                </label>
+            </td>
+            <td class="text-secondary">
+                {{if .LastRunAt}}
+                    {{timeAgo .LastRunAt}}
+                    {{if .LastRunStatus}}
+                    <span class="badge {{statusBadge .LastRunStatus}}">{{.LastRunStatus}}</span>
+                    {{end}}
+                {{else}}&mdash;{{end}}
+            </td>
+            <td class="text-secondary">{{if .NextRunAt}}{{timeAgo .NextRunAt}}{{else}}&mdash;{{end}}</td>
+            <td>
+                <button class="btn btn-danger btn-sm" onclick="confirmAction('Delete this scheduled job?', '/api/scheduler/{{.ID}}', 'DELETE')">Delete</button>
+            </td>
+        </tr>
+        {{end}}
+    </tbody>
+</table>
+{{else}}
+<div class="empty-state">
+    <div class="empty-icon">&#9200;</div>
+    <p>No scheduled jobs configured</p>
+</div>
+{{end}}
+
+<!-- New Job Modal -->
+<div id="new-job-modal" class="modal-overlay">
+    <div class="modal">
+        <div class="modal-header">
+            <h3>Create Scheduled Job</h3>
+            <button class="btn-icon" onclick="document.getElementById('new-job-modal').classList.remove('open')">&times;</button>
+        </div>
+        <form id="create-job-form" onsubmit="return submitJob(event)">
+            <div class="form-group">
+                <label>Template Name</label>
+                <input type="text" name="template_name" required placeholder="my-workflow">
+            </div>
+            <div class="form-group">
+                <label>Template Version (optional)</label>
+                <input type="text" name="template_version" placeholder="latest">
+            </div>
+            <div class="form-group">
+                <label>Cron Expression</label>
+                <input type="text" name="cron_expression" required placeholder="*/5 * * * *">
+            </div>
+            <div class="form-group">
+                <label>Agent ID</label>
+                <input type="text" name="agent_id" required placeholder="agent-id">
+            </div>
+            <div class="form-group">
+                <label>Params (JSON, optional)</label>
+                <textarea name="params" rows="4" placeholder='{"key": "value"}'
+                    style="font-family: var(--op-font-mono); font-size: 0.8rem;"></textarea>
+            </div>
+            <div class="form-group flex items-center gap-sm">
+                <label class="toggle">
+                    <input type="checkbox" name="enabled" checked>
+                    <span class="slider"></span>
+                </label>
+                <span class="text-secondary" style="font-size: 0.85rem;">Enabled</span>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" onclick="document.getElementById('new-job-modal').classList.remove('open')">Cancel</button>
+                <button type="submit" class="btn btn-primary">Create</button>
+            </div>
+        </form>
+    </div>
+</div>
+<script>
+function toggleJob(id, enabled) {
+    fetch('/api/scheduler/' + id, {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({enabled: enabled})
+    });
+}
+function submitJob(e) {
+    e.preventDefault();
+    var form = e.target;
+    var params = null;
+    if (form.params.value.trim()) {
+        try { params = JSON.parse(form.params.value); }
+        catch(err) { alert('Invalid JSON: ' + err.message); return false; }
+    }
+    fetch('/api/scheduler', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            template_name: form.template_name.value,
+            template_version: form.template_version.value,
+            cron_expression: form.cron_expression.value,
+            agent_id: form.agent_id.value,
+            params: params,
+            enabled: form.enabled.checked
+        })
+    }).then(function(r) {
+        if (r.ok) { window.location.reload(); }
+        else { r.json().then(function(d) { alert(d.error || 'Error creating job'); }); }
+    });
+    return false;
+}
+</script>
+{{end}}

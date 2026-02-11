@@ -1,0 +1,96 @@
+{{define "content"}}
+<div class="page-header">
+    <h1>Templates</h1>
+    <button class="btn btn-primary" onclick="document.getElementById('new-template-modal').classList.add('open')">New Template</button>
+</div>
+
+{{if .Templates}}
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Version</th>
+            <th>Description</th>
+            <th>Agent</th>
+            <th>Created</th>
+        </tr>
+    </thead>
+    <tbody>
+        {{range .Templates}}
+        <tr class="clickable" data-href="/templates/{{.Name}}?version={{.Version}}">
+            <td><strong>{{.Name}}</strong></td>
+            <td><span class="badge badge-secondary">{{.Version}}</span></td>
+            <td class="text-secondary">{{if .Description}}{{truncate .Description 60}}{{else}}&mdash;{{end}}</td>
+            <td class="mono">{{.AgentID}}</td>
+            <td class="text-secondary">{{timeAgo .CreatedAt}}</td>
+        </tr>
+        {{end}}
+    </tbody>
+</table>
+{{else}}
+<div class="empty-state">
+    <div class="empty-icon">&#9776;</div>
+    <p>No templates defined yet</p>
+</div>
+{{end}}
+
+<!-- New Template Modal -->
+<div id="new-template-modal" class="modal-overlay">
+    <div class="modal">
+        <div class="modal-header">
+            <h3>Create Template</h3>
+            <button class="btn-icon" onclick="document.getElementById('new-template-modal').classList.remove('open')">&times;</button>
+        </div>
+        <form id="create-template-form" onsubmit="return submitTemplate(event)">
+            <div class="form-group">
+                <label>Name</label>
+                <input type="text" name="name" required placeholder="my-workflow">
+            </div>
+            <div class="form-group">
+                <label>Description</label>
+                <input type="text" name="description" placeholder="Optional description">
+            </div>
+            <div class="form-group">
+                <label>Agent ID</label>
+                <input type="text" name="agent_id" placeholder="agent-id">
+            </div>
+            <div class="form-group">
+                <label>Definition (JSON)</label>
+                <textarea name="definition" rows="12" required placeholder='{"steps": [...]}'
+                    style="font-family: var(--op-font-mono); font-size: 0.8rem;"></textarea>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" onclick="document.getElementById('new-template-modal').classList.remove('open')">Cancel</button>
+                <button type="submit" class="btn btn-primary">Create</button>
+            </div>
+        </form>
+    </div>
+</div>
+<script>
+function submitTemplate(e) {
+    e.preventDefault();
+    var form = e.target;
+    var def;
+    try {
+        def = JSON.parse(form.definition.value);
+    } catch(err) {
+        alert('Invalid JSON in definition: ' + err.message);
+        return false;
+    }
+    fetch('/api/templates', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            name: form.name.value,
+            description: form.description.value,
+            agent_id: form.agent_id.value,
+            definition: def
+        })
+    }).then(function(r) {
+        if (r.ok) { window.location.reload(); }
+        else { r.json().then(function(d) { alert(d.error || 'Error creating template'); }); }
+    });
+    return false;
+}
+</script>
+{{end}}

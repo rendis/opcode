@@ -1,0 +1,13 @@
+{{define "activity_item"}}
+<li class="activity-item fade-in">
+    <div class="activity-dot {{.Type}}"></div>
+    <div class="activity-content">
+        <span class="event-type">{{.Type}}</span>
+        <span class="event-detail">
+            {{if .StepID}}&mdash; {{.StepID}}{{end}}
+            {{if .AgentID}}<span class="text-muted">({{.AgentID}})</span>{{end}}
+        </span>
+    </div>
+    <span class="activity-time">{{timeAgo .Timestamp}}</span>
+</li>
+{{end}}

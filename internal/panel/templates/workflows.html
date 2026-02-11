@@ -1,0 +1,66 @@
+{{define "content"}}
+<div class="page-header">
+    <h1>Workflows</h1>
+</div>
+
+<form class="filter-bar" method="get" action="/workflows">
+    <select name="status">
+        <option value="">All Statuses</option>
+        <option value="active" {{if eq .Status "active"}}selected{{end}}>Active</option>
+        <option value="suspended" {{if eq .Status "suspended"}}selected{{end}}>Suspended</option>
+        <option value="completed" {{if eq .Status "completed"}}selected{{end}}>Completed</option>
+        <option value="failed" {{if eq .Status "failed"}}selected{{end}}>Failed</option>
+        <option value="cancelled" {{if eq .Status "cancelled"}}selected{{end}}>Cancelled</option>
+        <option value="pending" {{if eq .Status "pending"}}selected{{end}}>Pending</option>
+    </select>
+    <input type="text" name="agent_id" placeholder="Agent ID" value="{{.AgentID}}">
+    <button type="submit" class="btn btn-secondary btn-filter">Filter</button>
+</form>
+
+{{if .Workflows}}
+<table>
+    <thead>
+        <tr>
+            <th>ID</th>
+            <th>Name</th>
+            <th>Template</th>
+            <th>Agent</th>
+            <th>Status</th>
+            <th>Created</th>
+        </tr>
+    </thead>
+    <tbody>
+        {{range .Workflows}}
+        <tr class="clickable" data-href="/workflows/{{.ID}}">
+            <td class="mono">{{truncate .ID 8}}</td>
+            <td>{{if .Name}}{{.Name}}{{else}}{{.TemplateName}}{{end}}</td>
+            <td>{{.TemplateName}}{{if .TemplateVersion}} <span class="text-muted">{{.TemplateVersion}}</span>{{end}}</td>
+            <td class="mono">{{.AgentID}}</td>
+            <td><span class="badge {{statusBadge (printf "%s" .Status)}}">{{.Status}}</span></td>
+            <td class="text-secondary">{{timeAgo .CreatedAt}}</td>
+        </tr>
+        {{end}}
+    </tbody>
+</table>
+
+{{if gt .Limit 0}}
+<div class="pagination">
+    {{if gt .Offset 0}}
+    <a href="/workflows?status={{.Status}}&agent_id={{.AgentID}}&limit={{.Limit}}&offset={{subtract .Offset .Limit}}">&laquo; Prev</a>
+    {{else}}
+    <span class="disabled">&laquo; Prev</span>
+    {{end}}
+    {{if ge (len .Workflows) .Limit}}
+    <a href="/workflows?status={{.Status}}&agent_id={{.AgentID}}&limit={{.Limit}}&offset={{add .Offset .Limit}}">Next &raquo;</a>
+    {{else}}
+    <span class="disabled">Next &raquo;</span>
+    {{end}}
+</div>
+{{end}}
+{{else}}
+<div class="empty-state">
+    <div class="empty-icon">&#10227;</div>
+    <p>No workflows found</p>
+</div>
+{{end}}
+{{end}}

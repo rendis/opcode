@@ -1,0 +1,72 @@
+{{define "content"}}
+<div class="page-header">
+    <h1>Events</h1>
+</div>
+
+<form class="filter-bar" method="get" action="/events">
+    <input type="text" name="workflow_id" placeholder="Workflow ID" value="{{.WorkflowID}}">
+    <select name="event_type">
+        <option value="">All Types</option>
+        <option value="workflow_started" {{if eq .EventType "workflow_started"}}selected{{end}}>workflow_started</option>
+        <option value="workflow_completed" {{if eq .EventType "workflow_completed"}}selected{{end}}>workflow_completed</option>
+        <option value="workflow_failed" {{if eq .EventType "workflow_failed"}}selected{{end}}>workflow_failed</option>
+        <option value="workflow_suspended" {{if eq .EventType "workflow_suspended"}}selected{{end}}>workflow_suspended</option>
+        <option value="workflow_cancelled" {{if eq .EventType "workflow_cancelled"}}selected{{end}}>workflow_cancelled</option>
+        <option value="workflow_timeout" {{if eq .EventType "workflow_timeout"}}selected{{end}}>workflow_timeout</option>
+        <option value="step_started" {{if eq .EventType "step_started"}}selected{{end}}>step_started</option>
+        <option value="step_completed" {{if eq .EventType "step_completed"}}selected{{end}}>step_completed</option>
+        <option value="step_failed" {{if eq .EventType "step_failed"}}selected{{end}}>step_failed</option>
+        <option value="step_retrying" {{if eq .EventType "step_retrying"}}selected{{end}}>step_retrying</option>
+        <option value="decision_requested" {{if eq .EventType "decision_requested"}}selected{{end}}>decision_requested</option>
+        <option value="decision_resolved" {{if eq .EventType "decision_resolved"}}selected{{end}}>decision_resolved</option>
+    </select>
+    <button type="submit" class="btn btn-secondary btn-filter">Filter</button>
+</form>
+
+{{if .Events}}
+<table>
+    <thead>
+        <tr>
+            <th>Seq</th>
+            <th>Type</th>
+            <th>Workflow</th>
+            <th>Step</th>
+            <th>Agent</th>
+            <th>Time</th>
+            <th>Payload</th>
+        </tr>
+    </thead>
+    <tbody>
+        {{range .Events}}
+        <tr>
+            <td class="mono text-muted">{{.Sequence}}</td>
+            <td><span class="badge badge-secondary">{{.Type}}</span></td>
+            <td class="mono"><a href="/workflows/{{.WorkflowID}}">{{truncate .WorkflowID 8}}</a></td>
+            <td class="mono">{{if .StepID}}{{.StepID}}{{else}}&mdash;{{end}}</td>
+            <td class="mono">{{if .AgentID}}{{.AgentID}}{{else}}&mdash;{{end}}</td>
+            <td class="text-secondary">{{timeAgo .Timestamp}}</td>
+            <td>
+                {{if .Payload}}
+                <div class="expandable">
+                    <span class="expandable-toggle">Payload</span>
+                    <div class="expandable-body">
+                        <div class="json-viewer">{{json .Payload}}</div>
+                    </div>
+                </div>
+                {{else}}&mdash;{{end}}
+            </td>
+        </tr>
+        {{end}}
+    </tbody>
+</table>
+{{else}}
+<div class="empty-state">
+    <div class="empty-icon">&#9998;</div>
+    {{if or .WorkflowID .EventType}}
+    <p>No events match the current filter</p>
+    {{else}}
+    <p>Enter a Workflow ID or select an Event Type to search</p>
+    {{end}}
+</div>
+{{end}}
+{{end}}

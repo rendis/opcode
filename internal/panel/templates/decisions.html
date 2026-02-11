@@ -1,0 +1,19 @@
+{{define "content"}}
+<div class="page-header">
+    <h1>Pending Decisions</h1>
+    <span class="text-secondary">{{len .Decisions}} pending</span>
+</div>
+
+{{if .Decisions}}
+<div class="decisions-grid">
+    {{range .Decisions}}
+    {{template "decision_card" .}}
+    {{end}}
+</div>
+{{else}}
+<div class="empty-state">
+    <div class="empty-icon">&#10003;</div>
+    <p>No pending decisions. All clear.</p>
+</div>
+{{end}}
+{{end}}
