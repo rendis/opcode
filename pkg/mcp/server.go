@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -21,6 +22,7 @@ type OpcodeServerDeps struct {
 	Vault    secrets.Vault
 	Registry actions.ActionRegistry
 	Hub      streaming.EventHub
+	Sessions *SessionRegistry
 	Logger   *slog.Logger
 }
 
@@ -31,15 +33,21 @@ type OpcodeServer struct {
 	vault     secrets.Vault
 	registry  actions.ActionRegistry
 	hub       streaming.EventHub
+	sessions  *SessionRegistry
 	logger    *slog.Logger
 	mcpServer *server.MCPServer
 }
 
-// NewOpcodeServer creates a new OpcodeServer with all 5 tools registered.
+// NewOpcodeServer creates a new OpcodeServer with all 6 tools registered.
 func NewOpcodeServer(deps OpcodeServerDeps) *OpcodeServer {
 	logger := deps.Logger
 	if logger == nil {
 		logger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	}
+
+	sessions := deps.Sessions
+	if sessions == nil {
+		sessions = NewSessionRegistry()
 	}
 
 	s := &OpcodeServer{
@@ -48,6 +56,7 @@ func NewOpcodeServer(deps OpcodeServerDeps) *OpcodeServer {
 		vault:    deps.Vault,
 		registry: deps.Registry,
 		hub:      deps.Hub,
+		sessions: sessions,
 		logger:   logger,
 	}
 
@@ -56,7 +65,7 @@ func NewOpcodeServer(deps OpcodeServerDeps) *OpcodeServer {
 		"1.0.0",
 		server.WithToolCapabilities(false),
 		server.WithRecovery(),
-		server.WithInstructions("Opcode is an agent-first workflow orchestration engine. Use opcode.run to execute workflows, opcode.status to check progress, opcode.signal to send signals to suspended workflows, opcode.define to register templates, and opcode.query to list workflows/events/templates."),
+		server.WithInstructions("Opcode is an agent-first workflow orchestration engine. Use opcode.run to execute workflows, opcode.status to check progress, opcode.signal to send signals to suspended workflows, opcode.define to register templates, opcode.query to list workflows/events/templates, and opcode.diagram to generate workflow visualizations."),
 	)
 
 	mcpSrv.AddTools(s.tools()...)
@@ -64,10 +73,30 @@ func NewOpcodeServer(deps OpcodeServerDeps) *OpcodeServer {
 	return s
 }
 
-// Serve starts the stdio transport and blocks until ctx is cancelled or stdin closes.
-func (s *OpcodeServer) Serve(ctx context.Context) error {
-	stdio := server.NewStdioServer(s.mcpServer)
-	return stdio.Listen(ctx, os.Stdin, os.Stdout)
+// ServeSSE starts the SSE transport and blocks until ctx is cancelled.
+func (s *OpcodeServer) ServeSSE(ctx context.Context, addr, baseURL string) error {
+	sseServer := server.NewSSEServer(s.mcpServer,
+		server.WithBaseURL(baseURL),
+		server.WithKeepAliveInterval(30*time.Second),
+	)
+
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = sseServer.Shutdown(shutdownCtx)
+	}()
+
+	return sseServer.Start(addr)
+}
+
+// NewSSEServer creates an SSE server for use with a custom HTTP mux.
+// The returned SSEServer implements http.Handler and can be mounted at /sse and /message.
+func (s *OpcodeServer) NewSSEServer(baseURL string) *server.SSEServer {
+	return server.NewSSEServer(s.mcpServer,
+		server.WithBaseURL(baseURL),
+		server.WithKeepAliveInterval(30*time.Second),
+	)
 }
 
 // MCPServer returns the underlying MCPServer for testing or custom transports.
@@ -75,7 +104,12 @@ func (s *OpcodeServer) MCPServer() *server.MCPServer {
 	return s.mcpServer
 }
 
-// tools returns the 5 registered MCP tools as ServerTool entries.
+// Sessions returns the session registry for creating notifiers.
+func (s *OpcodeServer) Sessions() *SessionRegistry {
+	return s.sessions
+}
+
+// tools returns the 6 registered MCP tools as ServerTool entries.
 func (s *OpcodeServer) tools() []server.ServerTool {
 	return []server.ServerTool{
 		{Tool: runTool(), Handler: s.handleRun},
@@ -83,6 +117,7 @@ func (s *OpcodeServer) tools() []server.ServerTool {
 		{Tool: signalTool(), Handler: s.handleSignal},
 		{Tool: defineTool(), Handler: s.handleDefine},
 		{Tool: queryTool(), Handler: s.handleQuery},
+		{Tool: diagramTool(), Handler: s.handleDiagram},
 	}
 }
 
@@ -90,7 +125,7 @@ func (s *OpcodeServer) tools() []server.ServerTool {
 
 func runTool() mcp.Tool {
 	return mcp.NewTool("opcode.run",
-		mcp.WithDescription("Execute a workflow from a registered template"),
+		mcp.WithDescription("Execute a workflow from a registered template. Returns workflow_id, status, and per-step results. Workflows with reasoning steps will return status 'suspended'"),
 		mcp.WithString("template_name", mcp.Required(), mcp.Description("Name of the workflow template to execute")),
 		mcp.WithString("version", mcp.Description("Template version (default: latest)")),
 		mcp.WithObject("params", mcp.Description("Input parameters for the workflow")),
@@ -100,14 +135,14 @@ func runTool() mcp.Tool {
 
 func statusTool() mcp.Tool {
 	return mcp.NewTool("opcode.status",
-		mcp.WithDescription("Get workflow execution status"),
+		mcp.WithDescription("Get workflow execution status. Returns steps, events, and pending_decisions for suspended workflows"),
 		mcp.WithString("workflow_id", mcp.Required(), mcp.Description("ID of the workflow to query")),
 	)
 }
 
 func signalTool() mcp.Tool {
 	return mcp.NewTool("opcode.signal",
-		mcp.WithDescription("Send a signal to a suspended workflow"),
+		mcp.WithDescription("Send a signal to a suspended workflow. Decision signals automatically resume the workflow and return the final status"),
 		mcp.WithString("workflow_id", mcp.Required(), mcp.Description("ID of the target workflow")),
 		mcp.WithString("signal_type", mcp.Required(),
 			mcp.Enum("decision", "data", "cancel", "retry", "skip"),
@@ -122,7 +157,7 @@ func signalTool() mcp.Tool {
 
 func defineTool() mcp.Tool {
 	return mcp.NewTool("opcode.define",
-		mcp.WithDescription("Register a reusable workflow template"),
+		mcp.WithDescription("Register a reusable workflow template. Version auto-increments (v1, v2, v3...)"),
 		mcp.WithString("name", mcp.Required(), mcp.Description("Template name")),
 		mcp.WithObject("definition", mcp.Required(), mcp.Description("Workflow definition object")),
 		mcp.WithObject("input_schema", mcp.Description("JSON Schema for input validation")),
@@ -135,7 +170,7 @@ func defineTool() mcp.Tool {
 
 func queryTool() mcp.Tool {
 	return mcp.NewTool("opcode.query",
-		mcp.WithDescription("Query workflows, events, or templates"),
+		mcp.WithDescription("Query workflows, events, or templates. Returns {\"<resource>\": [...]} where key matches the queried resource type"),
 		mcp.WithString("resource", mcp.Required(),
 			mcp.Enum("workflows", "events", "templates"),
 			mcp.Description("Type of resource to query"),

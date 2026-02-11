@@ -18,7 +18,7 @@ func TestToolRegistration(t *testing.T) {
 	s := NewOpcodeServer(OpcodeServerDeps{})
 
 	tools := s.mcpServer.ListTools()
-	require.Len(t, tools, 5)
+	require.Len(t, tools, 6)
 
 	expectedTools := []string{
 		"opcode.run",
@@ -26,6 +26,7 @@ func TestToolRegistration(t *testing.T) {
 		"opcode.signal",
 		"opcode.define",
 		"opcode.query",
+		"opcode.diagram",
 	}
 	for _, name := range expectedTools {
 		tool := s.mcpServer.GetTool(name)
@@ -39,11 +40,12 @@ func TestToolDefinitions(t *testing.T) {
 		toolName    string
 		description string
 	}{
-		{"run", "opcode.run", "Execute a workflow from a registered template"},
-		{"status", "opcode.status", "Get workflow execution status"},
-		{"signal", "opcode.signal", "Send a signal to a suspended workflow"},
-		{"define", "opcode.define", "Register a reusable workflow template"},
-		{"query", "opcode.query", "Query workflows, events, or templates"},
+		{"run", "opcode.run", "Execute a workflow from a registered template. Returns workflow_id, status, and per-step results. Workflows with reasoning steps will return status 'suspended'"},
+		{"status", "opcode.status", "Get workflow execution status. Returns steps, events, and pending_decisions for suspended workflows"},
+		{"signal", "opcode.signal", "Send a signal to a suspended workflow. Decision signals automatically resume the workflow and return the final status"},
+		{"define", "opcode.define", "Register a reusable workflow template. Version auto-increments (v1, v2, v3...)"},
+		{"query", "opcode.query", "Query workflows, events, or templates. Returns {\"<resource>\": [...]} where key matches the queried resource type"},
+		{"diagram", "opcode.diagram", "Generate a visual diagram of a workflow. Returns ASCII art, Mermaid flowchart syntax, or base64-encoded PNG image"},
 	}
 
 	s := NewOpcodeServer(OpcodeServerDeps{})

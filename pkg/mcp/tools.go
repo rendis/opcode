@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -11,6 +12,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/mark3labs/mcp-go/server"
+	"github.com/rendis/opcode/internal/diagram"
 	"github.com/rendis/opcode/internal/store"
 	"github.com/rendis/opcode/pkg/schema"
 )
@@ -32,6 +35,9 @@ func (s *OpcodeServer) handleRun(ctx context.Context, req mcp.CallToolRequest) (
 	if regErr := s.ensureAgent(ctx, agentID); regErr != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to register agent: %v", regErr)), nil
 	}
+
+	// Capture session mapping for notifications.
+	s.captureSession(ctx, agentID)
 
 	// Resolve template.
 	tpl, tplErr := s.resolveTemplate(ctx, templateName, version)
@@ -97,6 +103,11 @@ func (s *OpcodeServer) handleSignal(ctx context.Context, req mcp.CallToolRequest
 	agentID := req.GetString("agent_id", "")
 	reasoning := req.GetString("reasoning", "")
 
+	// Capture session mapping for notifications.
+	if agentID != "" {
+		s.captureSession(ctx, agentID)
+	}
+
 	signal := schema.Signal{
 		Type:      schema.SignalType(signalType),
 		StepID:    stepID,
@@ -107,6 +118,22 @@ func (s *OpcodeServer) handleSignal(ctx context.Context, req mcp.CallToolRequest
 
 	if sigErr := s.executor.Signal(ctx, workflowID, signal); sigErr != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("signal failed: %v", sigErr)), nil
+	}
+
+	// Auto-resume the workflow after a decision signal so the agent
+	// doesn't have to make a separate call.
+	if signal.Type == schema.SignalDecision {
+		result, resumeErr := s.executor.Resume(ctx, workflowID)
+		if resumeErr != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("signal accepted but resume failed: %v", resumeErr)), nil
+		}
+		return marshalResult(map[string]any{
+			"ok":          true,
+			"workflow_id": workflowID,
+			"signal_type": signalType,
+			"resumed":     true,
+			"status":      result.Status,
+		})
 	}
 
 	return marshalResult(map[string]any{
@@ -146,6 +173,9 @@ func (s *OpcodeServer) handleDefine(ctx context.Context, req mcp.CallToolRequest
 	if regErr := s.ensureAgent(ctx, agentID); regErr != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to register agent: %v", regErr)), nil
 	}
+
+	// Capture session mapping for notifications.
+	s.captureSession(ctx, agentID)
 
 	// Auto-increment version by finding latest existing.
 	nextVersion := s.nextVersion(ctx, name)
@@ -232,7 +262,7 @@ func (s *OpcodeServer) queryWorkflows(ctx context.Context, filter map[string]any
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("query failed: %v", err)), nil
 	}
-	return marshalResult(workflows)
+	return marshalResult(map[string]any{"workflows": workflows})
 }
 
 func (s *OpcodeServer) queryEvents(ctx context.Context, filter map[string]any) (*mcp.CallToolResult, error) {
@@ -260,7 +290,7 @@ func (s *OpcodeServer) queryEvents(ctx context.Context, filter map[string]any) (
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("query failed: %v", err)), nil
 		}
-		return marshalResult(events)
+		return marshalResult(map[string]any{"events": events})
 	}
 
 	// No event type filter — use GetEvents (requires workflow_id).
@@ -272,7 +302,7 @@ func (s *OpcodeServer) queryEvents(ctx context.Context, filter map[string]any) (
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("query failed: %v", err)), nil
 	}
-	return marshalResult(events)
+	return marshalResult(map[string]any{"events": events})
 }
 
 func (s *OpcodeServer) queryTemplates(ctx context.Context, filter map[string]any) (*mcp.CallToolResult, error) {
@@ -290,7 +320,7 @@ func (s *OpcodeServer) queryTemplates(ctx context.Context, filter map[string]any
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("query failed: %v", err)), nil
 	}
-	return marshalResult(templates)
+	return marshalResult(map[string]any{"templates": templates})
 }
 
 // --- Internal helpers ---
@@ -381,6 +411,13 @@ func extractInt(filter map[string]any, key string, defaultVal int) int {
 	return defaultVal
 }
 
+// captureSession maps the agent ID to its current MCP session for notifications.
+func (s *OpcodeServer) captureSession(ctx context.Context, agentID string) {
+	if session := server.ClientSessionFromContext(ctx); session != nil {
+		s.sessions.Register(agentID, session.SessionID())
+	}
+}
+
 // marshalResult converts a value to a JSON text tool result.
 func marshalResult(v any) (*mcp.CallToolResult, error) {
 	data, err := json.Marshal(v)
@@ -388,4 +425,88 @@ func marshalResult(v any) (*mcp.CallToolResult, error) {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to marshal result: %v", err)), nil
 	}
 	return mcp.NewToolResultJSON(json.RawMessage(data))
+}
+
+// handleDiagram generates a workflow diagram in the requested format.
+func (s *OpcodeServer) handleDiagram(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	format, err := req.RequireString("format")
+	if err != nil {
+		return mcp.NewToolResultError("format is required"), nil
+	}
+	if format != "ascii" && format != "mermaid" && format != "image" {
+		return mcp.NewToolResultError("format must be ascii, mermaid, or image"), nil
+	}
+
+	templateName := req.GetString("template_name", "")
+	version := req.GetString("version", "")
+	workflowID := req.GetString("workflow_id", "")
+
+	if templateName == "" && workflowID == "" {
+		return mcp.NewToolResultError("at least one of template_name or workflow_id is required"), nil
+	}
+
+	var def *schema.WorkflowDefinition
+	var states []*store.StepState
+
+	if workflowID != "" {
+		// Build from workflow instance.
+		wf, wfErr := s.store.GetWorkflow(ctx, workflowID)
+		if wfErr != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("workflow not found: %v", wfErr)), nil
+		}
+		def = &wf.Definition
+
+		// Include status overlay by default for workflow_id.
+		includeStatus := req.GetString("include_status", "true")
+		if includeStatus != "false" {
+			ss, ssErr := s.store.ListStepStates(ctx, workflowID)
+			if ssErr == nil {
+				states = ss
+			}
+		}
+	} else {
+		// Build from template.
+		tpl, tplErr := s.resolveTemplate(ctx, templateName, version)
+		if tplErr != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("template lookup failed: %v", tplErr)), nil
+		}
+		def = &tpl.Definition
+	}
+
+	model, buildErr := diagram.Build(def, states)
+	if buildErr != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("diagram build failed: %v", buildErr)), nil
+	}
+
+	switch format {
+	case "ascii":
+		text := diagram.RenderASCII(model)
+		return mcp.NewToolResultText(text), nil
+	case "mermaid":
+		text := diagram.RenderMermaid(model)
+		return mcp.NewToolResultText(text), nil
+	case "image":
+		png, imgErr := diagram.RenderImage(model)
+		if imgErr != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("image render failed: %v", imgErr)), nil
+		}
+		encoded := base64.StdEncoding.EncodeToString(png)
+		return mcp.NewToolResultText(encoded), nil
+	default:
+		return mcp.NewToolResultError("unsupported format"), nil
+	}
+}
+
+func diagramTool() mcp.Tool {
+	return mcp.NewTool("opcode.diagram",
+		mcp.WithDescription("Generate a visual diagram of a workflow. Returns ASCII art, Mermaid flowchart syntax, or base64-encoded PNG image"),
+		mcp.WithString("template_name", mcp.Description("Template name (use with version for a specific template)")),
+		mcp.WithString("version", mcp.Description("Template version (default: latest)")),
+		mcp.WithString("workflow_id", mcp.Description("Workflow ID to diagram (includes runtime status by default)")),
+		mcp.WithString("format", mcp.Required(),
+			mcp.Enum("ascii", "mermaid", "image"),
+			mcp.Description("Output format: ascii (text), mermaid (flowchart syntax), or image (base64 PNG)"),
+		),
+		mcp.WithString("include_status", mcp.Description("Include runtime status overlay (default: true for workflow_id, false for template)")),
+	)
 }

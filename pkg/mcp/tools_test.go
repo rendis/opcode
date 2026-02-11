@@ -24,6 +24,7 @@ type mockStore struct {
 	events     []*store.Event
 	agents     map[string]*store.Agent
 	storedTpls []*store.WorkflowTemplate
+	stepStates map[string][]*store.StepState // workflow_id → states
 
 	createWorkflowFn func(ctx context.Context, wf *store.Workflow) error
 }
@@ -148,6 +149,23 @@ func (m *mockStore) UpdateAgentSeen(_ context.Context, id string) error {
 	return nil
 }
 
+func (m *mockStore) ListAgents(_ context.Context) ([]*store.Agent, error) {
+	var agents []*store.Agent
+	for _, a := range m.agents {
+		agents = append(agents, a)
+	}
+	return agents, nil
+}
+
+func (m *mockStore) ListStepStates(_ context.Context, workflowID string) ([]*store.StepState, error) {
+	if m.stepStates != nil {
+		if states, ok := m.stepStates[workflowID]; ok {
+			return states, nil
+		}
+	}
+	return nil, nil
+}
+
 // --- Mock Executor ---
 
 type mockExecutor struct {
@@ -156,6 +174,8 @@ type mockExecutor struct {
 	statusResult *engine.WorkflowStatus
 	statusErr    error
 	signalErr    error
+	resumeResult *engine.ExecutionResult
+	resumeErr    error
 }
 
 func (m *mockExecutor) Run(_ context.Context, _ *store.Workflow, _ map[string]any) (*engine.ExecutionResult, error) {
@@ -163,7 +183,10 @@ func (m *mockExecutor) Run(_ context.Context, _ *store.Workflow, _ map[string]an
 }
 
 func (m *mockExecutor) Resume(_ context.Context, _ string) (*engine.ExecutionResult, error) {
-	return nil, nil
+	if m.resumeResult != nil || m.resumeErr != nil {
+		return m.resumeResult, m.resumeErr
+	}
+	return &engine.ExecutionResult{Status: schema.WorkflowStatusCompleted}, nil
 }
 
 func (m *mockExecutor) Signal(_ context.Context, _ string, _ schema.Signal) error {
@@ -368,6 +391,7 @@ func TestSignalTool(t *testing.T) {
 	text := extractText(t, result)
 	assert.Contains(t, text, "wf-123")
 	assert.Contains(t, text, "decision")
+	assert.Contains(t, text, "resumed") // decision signals auto-resume
 }
 
 func TestSignalToolMissingParams(t *testing.T) {
@@ -500,9 +524,9 @@ func TestQueryWorkflows(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, result.IsError)
 
-	var workflows []store.Workflow
-	unmarshalResult(t, result, &workflows)
-	assert.Len(t, workflows, 3)
+	var wrap struct{ Workflows []store.Workflow }
+	unmarshalResult(t, result, &wrap)
+	assert.Len(t, wrap.Workflows, 3)
 
 	// Query with status filter.
 	req = buildRequest("opcode.query", map[string]any{
@@ -511,8 +535,8 @@ func TestQueryWorkflows(t *testing.T) {
 	})
 	result, err = s.handleQuery(context.Background(), req)
 	require.NoError(t, err)
-	unmarshalResult(t, result, &workflows)
-	assert.Len(t, workflows, 2)
+	unmarshalResult(t, result, &wrap)
+	assert.Len(t, wrap.Workflows, 2)
 }
 
 func TestQueryEvents(t *testing.T) {
@@ -535,9 +559,9 @@ func TestQueryEvents(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, result.IsError)
 
-	var events []store.Event
-	unmarshalResult(t, result, &events)
-	assert.Len(t, events, 2)
+	var wrap struct{ Events []store.Event }
+	unmarshalResult(t, result, &wrap)
+	assert.Len(t, wrap.Events, 2)
 }
 
 func TestQueryTemplates(t *testing.T) {
@@ -558,9 +582,9 @@ func TestQueryTemplates(t *testing.T) {
 	result, err := s.handleQuery(context.Background(), req)
 	require.NoError(t, err)
 
-	var templates []store.WorkflowTemplate
-	unmarshalResult(t, result, &templates)
-	assert.Len(t, templates, 2)
+	var wrap struct{ Templates []store.WorkflowTemplate }
+	unmarshalResult(t, result, &wrap)
+	assert.Len(t, wrap.Templates, 2)
 }
 
 func TestQueryUnknownResource(t *testing.T) {
@@ -579,6 +603,134 @@ func TestVersionNum(t *testing.T) {
 	assert.Equal(t, 42, versionNum("v42"))
 	assert.Equal(t, 0, versionNum("invalid"))
 	assert.Equal(t, 3, versionNum("3"))
+}
+
+func TestDiagramToolFromTemplate(t *testing.T) {
+	ms := newMockStore()
+	ms.templates = []*store.WorkflowTemplate{
+		{
+			Name:    "my-wf",
+			Version: "v1",
+			Definition: schema.WorkflowDefinition{
+				Steps: []schema.StepDefinition{
+					{ID: "s1", Action: "http.request"},
+					{ID: "s2", Action: "noop", DependsOn: []string{"s1"}},
+				},
+			},
+		},
+	}
+
+	s := NewOpcodeServer(OpcodeServerDeps{Store: ms})
+
+	t.Run("mermaid", func(t *testing.T) {
+		req := buildRequest("opcode.diagram", map[string]any{
+			"template_name": "my-wf",
+			"format":        "mermaid",
+		})
+		result, err := s.handleDiagram(context.Background(), req)
+		require.NoError(t, err)
+		assert.False(t, result.IsError)
+
+		text := extractText(t, result)
+		assert.Contains(t, text, "graph TD")
+		assert.Contains(t, text, "s1")
+		assert.Contains(t, text, "s2")
+	})
+
+	t.Run("ascii", func(t *testing.T) {
+		req := buildRequest("opcode.diagram", map[string]any{
+			"template_name": "my-wf",
+			"format":        "ascii",
+		})
+		result, err := s.handleDiagram(context.Background(), req)
+		require.NoError(t, err)
+		assert.False(t, result.IsError)
+
+		text := extractText(t, result)
+		assert.Contains(t, text, "s1")
+		assert.Contains(t, text, "Start")
+	})
+
+	t.Run("image", func(t *testing.T) {
+		req := buildRequest("opcode.diagram", map[string]any{
+			"template_name": "my-wf",
+			"format":        "image",
+		})
+		result, err := s.handleDiagram(context.Background(), req)
+		require.NoError(t, err)
+		assert.False(t, result.IsError)
+
+		text := extractText(t, result)
+		assert.NotEmpty(t, text, "should return base64 encoded PNG")
+	})
+}
+
+func TestDiagramToolFromWorkflow(t *testing.T) {
+	ms := newMockStore()
+	ms.workflows = []*store.Workflow{
+		{
+			ID: "wf-diagram-1",
+			Definition: schema.WorkflowDefinition{
+				Steps: []schema.StepDefinition{
+					{ID: "a", Action: "noop"},
+					{ID: "b", Action: "echo", DependsOn: []string{"a"}},
+				},
+			},
+		},
+	}
+	ms.stepStates = map[string][]*store.StepState{
+		"wf-diagram-1": {
+			{WorkflowID: "wf-diagram-1", StepID: "a", Status: schema.StepStatusCompleted, DurationMs: 50},
+			{WorkflowID: "wf-diagram-1", StepID: "b", Status: schema.StepStatusRunning},
+		},
+	}
+
+	s := NewOpcodeServer(OpcodeServerDeps{Store: ms})
+
+	req := buildRequest("opcode.diagram", map[string]any{
+		"workflow_id": "wf-diagram-1",
+		"format":      "mermaid",
+	})
+	result, err := s.handleDiagram(context.Background(), req)
+	require.NoError(t, err)
+	assert.False(t, result.IsError)
+
+	text := extractText(t, result)
+	assert.Contains(t, text, "graph TD")
+	assert.Contains(t, text, "class a completed")
+	assert.Contains(t, text, "class b running")
+}
+
+func TestDiagramToolMissingParams(t *testing.T) {
+	s := NewOpcodeServer(OpcodeServerDeps{})
+
+	// Missing format.
+	req := buildRequest("opcode.diagram", map[string]any{
+		"template_name": "x",
+	})
+	result, err := s.handleDiagram(context.Background(), req)
+	require.NoError(t, err)
+	assert.True(t, result.IsError)
+
+	// Missing both template_name and workflow_id.
+	req = buildRequest("opcode.diagram", map[string]any{
+		"format": "mermaid",
+	})
+	result, err = s.handleDiagram(context.Background(), req)
+	require.NoError(t, err)
+	assert.True(t, result.IsError)
+}
+
+func TestDiagramToolInvalidFormat(t *testing.T) {
+	s := NewOpcodeServer(OpcodeServerDeps{})
+
+	req := buildRequest("opcode.diagram", map[string]any{
+		"template_name": "x",
+		"format":        "svg",
+	})
+	result, err := s.handleDiagram(context.Background(), req)
+	require.NoError(t, err)
+	assert.True(t, result.IsError)
 }
 
 // --- Test helpers ---
