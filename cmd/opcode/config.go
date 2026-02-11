@@ -1,0 +1,74 @@
+package main
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strconv"
+)
+
+// Config holds all opcode server configuration.
+// Priority: env vars > settings.json > defaults.
+type Config struct {
+	ListenAddr string `json:"listen_addr"`
+	BaseURL    string `json:"base_url"`
+	DBPath     string `json:"db_path"`
+	LogLevel   string `json:"log_level"`
+	PoolSize   int    `json:"pool_size"`
+}
+
+func defaultConfig() Config {
+	return Config{
+		ListenAddr: ":4100",
+		DBPath:     filepath.Join(opcodeDir(), "opcode.db"),
+		LogLevel:   "info",
+		PoolSize:   10,
+	}
+}
+
+func opcodeDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ".opcode"
+	}
+	return filepath.Join(home, ".opcode")
+}
+
+func settingsPath() string {
+	return filepath.Join(opcodeDir(), "settings.json")
+}
+
+func loadConfig() Config {
+	cfg := defaultConfig()
+
+	// Layer 2: settings.json (ignore if missing).
+	if data, err := os.ReadFile(settingsPath()); err == nil {
+		_ = json.Unmarshal(data, &cfg)
+	}
+
+	// Layer 3: env vars override.
+	if v := os.Getenv("OPCODE_LISTEN_ADDR"); v != "" {
+		cfg.ListenAddr = v
+	}
+	if v := os.Getenv("OPCODE_BASE_URL"); v != "" {
+		cfg.BaseURL = v
+	}
+	if v := os.Getenv("OPCODE_DB_PATH"); v != "" {
+		cfg.DBPath = v
+	}
+	if v := os.Getenv("OPCODE_LOG_LEVEL"); v != "" {
+		cfg.LogLevel = v
+	}
+	if v := os.Getenv("OPCODE_POOL_SIZE"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.PoolSize = n
+		}
+	}
+
+	// Derive base_url from listen_addr if empty.
+	if cfg.BaseURL == "" {
+		cfg.BaseURL = "http://localhost" + cfg.ListenAddr
+	}
+
+	return cfg
+}

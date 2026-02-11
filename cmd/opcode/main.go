@@ -3,42 +3,70 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
+
+	"net/http"
 
 	"github.com/google/uuid"
 	"github.com/rendis/opcode/internal/actions"
 	"github.com/rendis/opcode/internal/engine"
 	"github.com/rendis/opcode/internal/isolation"
 	"github.com/rendis/opcode/internal/logging"
+	"github.com/rendis/opcode/internal/panel"
 	"github.com/rendis/opcode/internal/plugins"
 	"github.com/rendis/opcode/internal/scheduler"
 	"github.com/rendis/opcode/internal/secrets"
 	"github.com/rendis/opcode/internal/store"
 	"github.com/rendis/opcode/internal/streaming"
 	"github.com/rendis/opcode/internal/validation"
-	"github.com/rendis/opcode/pkg/schema"
 	opcmcp "github.com/rendis/opcode/pkg/mcp"
+	"github.com/rendis/opcode/pkg/schema"
 )
 
 func main() {
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "install":
+			runInstall(os.Args[2:])
+			return
+		case "serve":
+			// fall through to serve
+		}
+	}
+	runServe()
+}
+
+func runServe() {
+	cfg := loadConfig()
+
 	// --- Logging ---
-	logLevel := envLogLevel("OPCODE_LOG_LEVEL", slog.LevelInfo)
+	logLevel := parseLogLevel(cfg.LogLevel)
 	innerHandler := slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel})
 	logger := slog.New(logging.NewCorrelationHandler(innerHandler))
 	slog.SetDefault(logger)
 
+	// --- Data directory ---
+	if dir := filepath.Dir(cfg.DBPath); dir != "." {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: cannot create data directory %s: %v\n", dir, err)
+			os.Exit(1)
+		}
+	}
+
 	// --- Store ---
-	dbPath := envString("OPCODE_DB_PATH", "opcode.db")
-	libsqlStore, err := store.NewLibSQLStore(dbPath)
+	libsqlStore, err := store.NewLibSQLStore(cfg.DBPath)
 	if err != nil {
-		logger.Error("failed to open store", slog.String("path", dbPath), slog.Any("error", err))
+		logger.Error("failed to open store", slog.String("path", cfg.DBPath), slog.Any("error", err))
 		os.Exit(1)
 	}
 	defer libsqlStore.Close()
@@ -51,7 +79,7 @@ func main() {
 	eventLog := store.NewEventLog(libsqlStore)
 
 	// --- Vault ---
-	vaultKey := envString("OPCODE_VAULT_KEY", "")
+	vaultKey := os.Getenv("OPCODE_VAULT_KEY")
 	var vault secrets.Vault
 	if vaultKey != "" {
 		v, vaultErr := secrets.NewAESVault(libsqlStore, secrets.VaultConfig{
@@ -94,18 +122,35 @@ func main() {
 	hub := streaming.NewMemoryHub()
 
 	// --- Executor ---
-	poolSize := envInt("OPCODE_POOL_SIZE", engine.DefaultPoolSize)
 	executor := engine.NewExecutor(libsqlStore, eventLog, registry, engine.ExecutorConfig{
-		PoolSize: poolSize,
+		PoolSize: cfg.PoolSize,
 	}, vault)
-	logger.Info("executor initialized", slog.Int("pool_size", poolSize))
+	logger.Info("executor initialized", slog.Int("pool_size", cfg.PoolSize))
 
-	// --- Workflow Actions (late-bind after executor exists) ---
+	// --- Session Registry ---
+	sessions := opcmcp.NewSessionRegistry()
+
+	// --- MCP Server (before workflow actions — notifier needs MCPServer) ---
+	mcpServer := opcmcp.NewOpcodeServer(opcmcp.OpcodeServerDeps{
+		Executor: executor,
+		Store:    libsqlStore,
+		Vault:    vault,
+		Registry: registry,
+		Hub:      hub,
+		Sessions: sessions,
+		Logger:   logger,
+	})
+
+	// --- Notifier ---
+	notifier := opcmcp.NewMCPNotifier(mcpServer.MCPServer(), sessions)
+
+	// --- Workflow Actions (late-bind after executor + MCP server exist) ---
 	subRunner := &templateRunner{store: libsqlStore, executor: executor, logger: logger}
 	err = actions.RegisterWorkflowActions(registry, actions.WorkflowActionDeps{
 		RunSubWorkflow: subRunner.runSubWorkflow,
 		Store:          libsqlStore,
 		Hub:            hub,
+		Notifier:       notifier,
 		Logger:         logger,
 	})
 	if err != nil {
@@ -120,15 +165,27 @@ func main() {
 	// --- Scheduler ---
 	sched := scheduler.NewScheduler(libsqlStore, subRunner, logger)
 
-	// --- MCP Server ---
-	mcpServer := opcmcp.NewOpcodeServer(opcmcp.OpcodeServerDeps{
-		Executor: executor,
+	// --- Recovery ---
+	recoverOrphanedWorkflows(context.Background(), libsqlStore, eventLog, logger)
+
+	// --- Panel ---
+	panelSrv := panel.NewPanelServer(panel.PanelDeps{
 		Store:    libsqlStore,
-		Vault:    vault,
-		Registry: registry,
+		Executor: executor,
 		Hub:      hub,
 		Logger:   logger,
 	})
+
+	// --- SSE Transport ---
+	sseServer := mcpServer.NewSSEServer(cfg.BaseURL)
+
+	// --- Compose HTTP mux: MCP SSE + Panel on same port ---
+	mux := http.NewServeMux()
+	mux.Handle("/sse", sseServer)
+	mux.Handle("/message", sseServer)
+	mux.Handle("/", panelSrv.Handler())
+
+	httpSrv := &http.Server{Addr: cfg.ListenAddr, Handler: mux}
 
 	// --- Start ---
 	ctx, cancel := context.WithCancel(context.Background())
@@ -137,6 +194,10 @@ func main() {
 	if err := sched.Start(ctx); err != nil {
 		logger.Error("scheduler start failed", slog.Any("error", err))
 		os.Exit(1)
+	}
+
+	if err := sched.RecoverMissed(ctx); err != nil {
+		logger.Warn("scheduler recovery failed", slog.Any("error", err))
 	}
 
 	// Graceful shutdown on SIGTERM/SIGINT.
@@ -149,23 +210,90 @@ func main() {
 		cancel()
 	}()
 
-	logger.Info("opcode server starting", slog.String("transport", "stdio"))
-	if err := mcpServer.Serve(ctx); err != nil && ctx.Err() == nil {
-		logger.Error("mcp server error", slog.Any("error", err))
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer shutdownCancel()
+		_ = sseServer.Shutdown(shutdownCtx)
+		_ = httpSrv.Shutdown(shutdownCtx)
+	}()
+
+	logger.Info("opcode server starting",
+		slog.String("addr", cfg.ListenAddr),
+		slog.String("panel", "http://"+cfg.ListenAddr),
+	)
+	if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if isAddrInUse(err) {
+			port := strings.TrimPrefix(cfg.ListenAddr, ":")
+			fmt.Fprintf(os.Stderr, "\nError: port %s is already in use.\n\nAnother opcode instance or a different service is listening on this port.\nTo fix, either:\n  1. Stop the existing process: lsof -ti tcp:%s | xargs kill\n  2. Use a different port: opcode install --listen-addr :4200\n\n", cfg.ListenAddr, port)
+		} else {
+			logger.Error("server error", slog.Any("error", err))
+		}
+		os.Exit(1)
 	}
 
 	// --- Shutdown ---
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer shutdownCancel()
-
 	if err := sched.Stop(); err != nil {
 		logger.Warn("scheduler stop error", slog.Any("error", err))
 	}
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutdownCancel()
 	if err := pluginMgr.StopAll(shutdownCtx); err != nil {
 		logger.Warn("plugin manager stop error", slog.Any("error", err))
 	}
 
 	logger.Info("opcode shutdown complete")
+}
+
+// recoverOrphanedWorkflows transitions any active workflows to suspended on startup.
+// This handles the case where the process crashed while workflows were running.
+func recoverOrphanedWorkflows(ctx context.Context, s store.Store, el *store.EventLog, logger *slog.Logger) {
+	activeStatus := schema.WorkflowStatusActive
+	workflows, err := s.ListWorkflows(ctx, store.WorkflowFilter{Status: &activeStatus})
+	if err != nil {
+		logger.Error("failed to scan orphaned workflows", slog.Any("error", err))
+		return
+	}
+	if len(workflows) == 0 {
+		return
+	}
+	suspendedStatus := schema.WorkflowStatusSuspended
+	recovered := 0
+	for _, wf := range workflows {
+		if err := s.UpdateWorkflow(ctx, wf.ID, store.WorkflowUpdate{Status: &suspendedStatus}); err != nil {
+			logger.Error("failed to suspend orphaned workflow",
+				slog.String("workflow_id", wf.ID), slog.Any("error", err))
+			continue
+		}
+		_ = el.AppendEvent(ctx, &store.Event{
+			WorkflowID: wf.ID,
+			Type:       schema.EventWorkflowInterrupted,
+			Payload:    json.RawMessage(`{"reason":"process_restart"}`),
+		})
+		recovered++
+	}
+	logger.Info("recovered orphaned workflows", slog.Int("count", recovered))
+}
+
+func isAddrInUse(err error) bool {
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		return errors.Is(opErr.Err, syscall.EADDRINUSE)
+	}
+	return strings.Contains(err.Error(), "address already in use")
+}
+
+func parseLogLevel(s string) slog.Level {
+	switch strings.ToLower(s) {
+	case "debug":
+		return slog.LevelDebug
+	case "warn", "warning":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
+	}
 }
 
 // templateRunner adapts Executor to the scheduler.SubWorkflowRunner interface.
@@ -239,41 +367,3 @@ func versionNum(v string) int {
 	n, _ := strconv.Atoi(v)
 	return n
 }
-
-// --- Env helpers ---
-
-func envString(key, defaultVal string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return defaultVal
-}
-
-func envInt(key string, defaultVal int) int {
-	if v := os.Getenv(key); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			return n
-		}
-	}
-	return defaultVal
-}
-
-func envLogLevel(key string, defaultVal slog.Level) slog.Level {
-	v := os.Getenv(key)
-	if v == "" {
-		return defaultVal
-	}
-	switch strings.ToLower(v) {
-	case "debug":
-		return slog.LevelDebug
-	case "info":
-		return slog.LevelInfo
-	case "warn", "warning":
-		return slog.LevelWarn
-	case "error":
-		return slog.LevelError
-	default:
-		return defaultVal
-	}
-}
-
