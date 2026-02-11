@@ -25,6 +25,9 @@ func RegisterBuiltins(reg *Registry, validator *validation.JSONSchemaValidator, 
 	// Shell actions.
 	all = append(all, ShellActions(shellCfg)...)
 
+	// Expression actions.
+	all = append(all, ExprActions()...)
+
 	for _, a := range all {
 		if err := reg.Register(a); err != nil {
 			return err

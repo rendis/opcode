@@ -2,7 +2,7 @@
   "name": "multi-agent-review",
   "description": "Demonstrates two-agent coordination: researcher-agent runs analysis, reviewer-agent approves or rejects via targeted reasoning node.",
   "category": "coordination",
-  "features": ["reasoning", "target_agent", "http.get", "workflow.log"],
+  "features": ["reasoning", "target_agent", "http.get", "expr.eval", "workflow.log"],
   "input_schema": {
     "type": "object",
     "required": ["data_url", "threshold"],
@@ -37,7 +37,7 @@
         "action": "expr.eval",
         "depends_on": ["fetch-data"],
         "params": {
-          "expression": "filter(steps['fetch-data'].output.body.items, {.score >= inputs.threshold})"
+          "expression": "filter(steps['fetch-data'].body.items, {.score >= inputs.threshold})"
         }
       },
       {
@@ -52,7 +52,7 @@
             { "id": "reject", "description": "Results do not meet standards, reject" }
           ],
           "data_inject": {
-            "item_count": "steps.analyze.output.length",
+            "filtered_results": "steps.analyze.output.result",
             "threshold": "inputs.threshold"
           },
           "timeout": "2h",
@@ -64,10 +64,10 @@
         "type": "action",
         "action": "http.post",
         "depends_on": ["review-gate"],
-        "condition": "steps['review-gate'].output.choice == 'approve'",
+        "condition": "steps['review-gate'].choice == 'approve'",
         "params": {
           "url": "https://api.example.com/publish",
-          "body": "${{steps.analyze.output}}"
+          "body": "${{steps.analyze.output.result}}"
         }
       },
       {
@@ -76,7 +76,7 @@
         "action": "workflow.log",
         "depends_on": ["review-gate"],
         "params": {
-          "message": "Review completed. Decision: ${{steps['review-gate'].output.choice}}"
+          "message": "Review completed. Decision: ${{steps['review-gate'].choice}}"
         }
       }
     ]

@@ -29,9 +29,11 @@ Thumbs.db
 
 # Agents
 CLAUDE.md
+GEMINI.md
 .claude
 .agents
 .agent
+backlog
 
 # Build
 /bin/

@@ -860,10 +860,12 @@ func (e *executorImpl) executeActionStep(ctx context.Context, run *workflowRun, 
 		return nil, schema.NewErrorf(schema.ErrCodeExecution, "action %q not found: %s", stepDef.Action, err.Error())
 	}
 
+	// Build interpolation scope once — used for both ${{}} resolution and action context.
+	scope := e.buildInterpolationScope(run, workflowID, params)
+
 	// Interpolate ${{...}} references in step params before execution.
 	interpolatedParams := stepDef.Params
 	if expressions.HasInterpolation(stepDef.Params) {
-		scope := e.buildInterpolationScope(run, workflowID, params)
 		interpolatedParams, err = e.interpolator.Resolve(ctx, stepDef.Params, scope)
 		if err != nil {
 			return nil, schema.NewErrorf(schema.ErrCodeInterpolation,
@@ -879,11 +881,15 @@ func (e *executorImpl) executeActionStep(ctx context.Context, run *workflowRun, 
 		}
 	}
 
-	// Build action context: workflow params enriched with execution metadata.
-	actionCtx := make(map[string]any, len(params)+3)
+	// Build action context: workflow params first, then structured scope keys always win.
+	actionCtx := make(map[string]any)
 	for k, v := range params {
 		actionCtx[k] = v
 	}
+	actionCtx["steps"] = scope.Steps
+	actionCtx["inputs"] = scope.Inputs
+	actionCtx["workflow"] = scope.Workflow
+	actionCtx["context"] = scope.Context
 	actionCtx["workflow_id"] = workflowID
 	actionCtx["step_id"] = stepDef.ID
 	actionCtx["agent_id"] = run.agentID

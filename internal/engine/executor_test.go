@@ -924,6 +924,43 @@ func TestExecutor_Run_StepParamsPassedToAction(t *testing.T) {
 	assert.Equal(t, "wf_value", receivedContext["wf_key"])
 }
 
+func TestExecutor_Run_ScopeKeysNotOverwrittenByParams(t *testing.T) {
+	te := newTestEnv()
+
+	var receivedContext map[string]any
+	te.registry.Register(&mockAction{
+		name: "scopecheck",
+		execFn: func(_ context.Context, input actions.ActionInput) (*actions.ActionOutput, error) {
+			receivedContext = input.Context
+			return &actions.ActionOutput{Data: json.RawMessage(`{"ok":true}`)}, nil
+		},
+	})
+
+	wf := newWorkflow("wf-scope", schema.StepDefinition{
+		ID:     "s1",
+		Type:   schema.StepTypeAction,
+		Action: "scopecheck",
+	})
+	te.store.CreateWorkflow(context.Background(), wf)
+
+	// Workflow params with a key "inputs" that collides with scope.Inputs.
+	wfParams := map[string]any{
+		"inputs":   "should_be_overwritten_by_scope",
+		"safe_key": "safe_value",
+	}
+	result, err := te.executor.Run(context.Background(), wf, wfParams)
+	require.NoError(t, err)
+	assert.Equal(t, schema.WorkflowStatusCompleted, result.Status)
+
+	// Scope "inputs" should be the structured map (from buildInterpolationScope), not the raw string.
+	scopeInputs, ok := receivedContext["inputs"].(map[string]any)
+	require.True(t, ok, "inputs should be structured scope map, not overwritten by params; got: %T", receivedContext["inputs"])
+	// The scope.Inputs contains the workflow params.
+	assert.Equal(t, "should_be_overwritten_by_scope", scopeInputs["inputs"])
+	// Backward-compat: raw param keys still accessible at top level.
+	assert.Equal(t, "safe_value", receivedContext["safe_key"])
+}
+
 func TestExecutor_Run_BackoffExponential(t *testing.T) {
 	policy := &schema.RetryPolicy{
 		Max:     3,

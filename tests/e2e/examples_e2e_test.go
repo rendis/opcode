@@ -210,10 +210,15 @@ func (h *exampleHarness) runSuspended(def schema.WorkflowDefinition, params map[
 
 func (h *exampleHarness) signal(wfID, stepID, choice string) {
 	h.t.Helper()
+	h.signalAs(wfID, stepID, choice, "example-agent")
+}
+
+func (h *exampleHarness) signalAs(wfID, stepID, choice, agentID string) {
+	h.t.Helper()
 	err := h.executor.Signal(context.Background(), wfID, schema.Signal{
 		Type:    schema.SignalDecision,
 		StepID:  stepID,
-		AgentID: "example-agent",
+		AgentID: agentID,
 		Payload: map[string]any{"choice": choice},
 	})
 	require.NoError(h.t, err)
@@ -233,6 +238,17 @@ func (h *exampleHarness) writeFile(name, content string) string {
 	require.NoError(h.t, os.MkdirAll(dir, 0755))
 	require.NoError(h.t, os.WriteFile(path, []byte(content), 0644))
 	return path
+}
+
+func (h *exampleHarness) getStepStates(wfID string) map[string]*store.StepState {
+	h.t.Helper()
+	states, err := h.store.ListStepStates(context.Background(), wfID)
+	require.NoError(h.t, err)
+	result := make(map[string]*store.StepState, len(states))
+	for _, s := range states {
+		result[s.StepID] = s
+	}
+	return result
 }
 
 // --- Example Tests ---
@@ -1026,4 +1042,57 @@ func TestExample_RepoHealthCheck(t *testing.T) {
 		result = h.resume(wfID)
 	}
 	assert.Equal(t, schema.WorkflowStatusCompleted, result.Status)
+}
+
+func TestExample_MultiAgentReview(t *testing.T) {
+	h := newExampleHarness(t)
+	def := loadWorkflow(t, "multi-agent-review")
+
+	// Mock http.get response with items containing scores.
+	mockData := map[string]any{
+		"items": []map[string]any{
+			{"id": 1, "score": 0.9, "title": "High quality item"},
+			{"id": 2, "score": 0.5, "title": "Low quality item"},
+			{"id": 3, "score": 0.85, "title": "Good item"},
+			{"id": 4, "score": 0.3, "title": "Poor item"},
+		},
+	}
+	srv := mockServer(t, mockData)
+
+	// Execute workflow with threshold 0.8 - should filter to 2 items.
+	result, wfID := h.runSuspended(def, map[string]any{
+		"data_url":  srv.URL,
+		"threshold": 0.8,
+	})
+
+	// Debug: print failure details if not suspended
+	if result.Status != schema.WorkflowStatusSuspended {
+		t.Logf("Workflow failed. Error: %v", result.Error)
+	}
+
+	// Fetch step states once — used for both debug logging and assertions.
+	steps := h.getStepStates(wfID)
+	if result.Status != schema.WorkflowStatusSuspended {
+		for id, step := range steps {
+			if step.Status == schema.StepStatusFailed {
+				t.Logf("Failed step %s: %s", id, string(step.Error))
+			}
+		}
+	}
+
+	require.Equal(t, schema.WorkflowStatusSuspended, result.Status)
+
+	// Verify analyze step completed successfully with expr.eval action.
+	analyzeStep, ok := steps["analyze"]
+	require.True(t, ok, "analyze step should exist")
+	assert.Equal(t, schema.StepStatusCompleted, analyzeStep.Status, "analyze step should complete")
+
+	// Verify the expr.eval output: filtered 2 items with score >= 0.8
+	var analyzeOutput map[string]any
+	require.NoError(t, json.Unmarshal(analyzeStep.Output, &analyzeOutput))
+	require.Contains(t, analyzeOutput, "result", "expr.eval output should have result field")
+
+	filtered, ok := analyzeOutput["result"].([]any)
+	require.True(t, ok, "result should be an array")
+	assert.Len(t, filtered, 2, "should filter to 2 items with score >= 0.8")
 }
