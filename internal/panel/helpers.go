@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strconv"
 	"time"
+
+	"github.com/rendis/opcode/internal/store"
 )
 
 // toJSON marshals a value to indented JSON for template rendering.
@@ -82,6 +84,19 @@ func truncate(s string, max int) string {
 		return s
 	}
 	return s[:max] + "..."
+}
+
+// templateNames extracts unique template names from a slice, preserving order.
+func templateNames(templates []*store.WorkflowTemplate) []string {
+	seen := make(map[string]bool)
+	var names []string
+	for _, t := range templates {
+		if !seen[t.Name] {
+			seen[t.Name] = true
+			names = append(names, t.Name)
+		}
+	}
+	return names
 }
 
 // writeJSON writes a JSON response with the given status code.

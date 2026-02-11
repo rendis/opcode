@@ -41,6 +41,7 @@ type templateDetailData struct {
 type workflowsData struct {
 	pageData
 	Workflows []*store.Workflow
+	Agents    []*store.Agent
 	Status    string
 	AgentID   string
 	Limit     int
@@ -62,7 +63,8 @@ type decisionsData struct {
 
 type schedulerData struct {
 	pageData
-	Jobs []*store.ScheduledJob
+	Jobs      []*store.ScheduledJob
+	Templates []*store.WorkflowTemplate
 }
 
 type eventsData struct {
@@ -199,9 +201,12 @@ func (s *PanelServer) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 		workflows = nil
 	}
 
+	agents, _ := s.deps.Store.ListAgents(ctx)
+
 	s.renderPage(w, "workflows.html", workflowsData{
 		pageData:  pageData{Title: "Workflows", Active: "workflows"},
 		Workflows: workflows,
+		Agents:    agents,
 		Status:    statusFilter,
 		AgentID:   agentFilter,
 		Limit:     limit,
@@ -263,9 +268,12 @@ func (s *PanelServer) handleScheduler(w http.ResponseWriter, r *http.Request) {
 		jobs = nil
 	}
 
+	templates, _ := s.deps.Store.ListTemplates(ctx, store.TemplateFilter{Limit: 500})
+
 	s.renderPage(w, "scheduler.html", schedulerData{
-		pageData: pageData{Title: "Scheduler", Active: "scheduler"},
-		Jobs:     jobs,
+		pageData:  pageData{Title: "Scheduler", Active: "scheduler"},
+		Jobs:      jobs,
+		Templates: templates,
 	})
 }
 

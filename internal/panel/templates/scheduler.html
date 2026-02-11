@@ -60,16 +60,23 @@
     <div class="modal">
         <div class="modal-header">
             <h3>Create Scheduled Job</h3>
-            <button class="btn-icon" onclick="document.getElementById('new-job-modal').classList.remove('open')">&times;</button>
+            <button class="btn-icon" onclick="var m=document.getElementById('new-job-modal');m.classList.remove('open');m.querySelector('form').reset()">&times;</button>
         </div>
         <form id="create-job-form" onsubmit="return submitJob(event)">
             <div class="form-group">
-                <label>Template Name</label>
-                <input type="text" name="template_name" required placeholder="my-workflow">
+                <label>Template</label>
+                <select name="template_name" required onchange="updateVersionSelect(this.value)">
+                    <option value="">Select template...</option>
+                    {{range $name := templateNames .Templates}}
+                    <option value="{{$name}}">{{$name}}</option>
+                    {{end}}
+                </select>
             </div>
             <div class="form-group">
-                <label>Template Version (optional)</label>
-                <input type="text" name="template_version" placeholder="latest">
+                <label>Version</label>
+                <select name="template_version">
+                    <option value="">latest</option>
+                </select>
             </div>
             <div class="form-group">
                 <label>Cron Expression</label>
@@ -84,21 +91,48 @@
                 <textarea name="params" rows="4" placeholder='{"key": "value"}'
                     style="font-family: var(--op-font-mono); font-size: 0.8rem;"></textarea>
             </div>
-            <div class="form-group flex items-center gap-sm">
-                <label class="toggle">
+            <div style="display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.75rem;">
+                <label class="toggle" style="margin: 0; display: inline-block;">
                     <input type="checkbox" name="enabled" checked>
                     <span class="slider"></span>
                 </label>
                 <span class="text-secondary" style="font-size: 0.85rem;">Enabled</span>
             </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" onclick="document.getElementById('new-job-modal').classList.remove('open')">Cancel</button>
-                <button type="submit" class="btn btn-primary">Create</button>
+            <div class="modal-footer" style="justify-content: center;">
+                <button type="button" class="btn btn-secondary" style="flex: 1; max-width: 160px; justify-content: center;" onclick="var m=document.getElementById('new-job-modal');m.classList.remove('open');m.querySelector('form').reset()">Cancel</button>
+                <button type="submit" class="btn btn-primary" style="flex: 1; max-width: 160px; justify-content: center;">Create</button>
             </div>
         </form>
     </div>
 </div>
 <script>
+var templateVersions = {
+    {{range $name := templateNames .Templates}}
+    "{{$name}}": [{{range $.Templates}}{{if eq .Name $name}}"{{.Version}}",{{end}}{{end}}],
+    {{end}}
+};
+var templateAgents = {
+    {{range .Templates}}
+    "{{.Name}}_{{.Version}}": "{{.AgentID}}",
+    {{end}}
+};
+function updateVersionSelect(name) {
+    var sel = document.querySelector('select[name="template_version"]');
+    while (sel.options.length > 1) sel.remove(1);
+    if (name && templateVersions[name]) {
+        templateVersions[name].forEach(function(v) {
+            var opt = document.createElement('option');
+            opt.value = v;
+            opt.textContent = v;
+            sel.appendChild(opt);
+        });
+        // Auto-fill agent ID from latest version
+        var key = name + '_' + templateVersions[name][0];
+        if (templateAgents[key]) {
+            document.querySelector('input[name="agent_id"]').value = templateAgents[key];
+        }
+    }
+}
 function toggleJob(id, enabled) {
     fetch('/api/scheduler/' + id, {
         method: 'PUT',

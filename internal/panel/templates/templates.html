@@ -39,7 +39,7 @@
     <div class="modal">
         <div class="modal-header">
             <h3>Create Template</h3>
-            <button class="btn-icon" onclick="document.getElementById('new-template-modal').classList.remove('open')">&times;</button>
+            <button class="btn-icon" onclick="var m=document.getElementById('new-template-modal');m.classList.remove('open');m.querySelector('form').reset()">&times;</button>
         </div>
         <form id="create-template-form" onsubmit="return submitTemplate(event)">
             <div class="form-group">
@@ -59,9 +59,9 @@
                 <textarea name="definition" rows="12" required placeholder='{"steps": [...]}'
                     style="font-family: var(--op-font-mono); font-size: 0.8rem;"></textarea>
             </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" onclick="document.getElementById('new-template-modal').classList.remove('open')">Cancel</button>
-                <button type="submit" class="btn btn-primary">Create</button>
+            <div class="modal-footer" style="justify-content: center;">
+                <button type="button" class="btn btn-secondary" style="flex: 1; max-width: 160px; justify-content: center;" onclick="var m=document.getElementById('new-template-modal');m.classList.remove('open');m.querySelector('form').reset()">Cancel</button>
+                <button type="submit" class="btn btn-primary" style="flex: 1; max-width: 160px; justify-content: center;">Create</button>
             </div>
         </form>
     </div>

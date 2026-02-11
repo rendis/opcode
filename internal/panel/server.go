@@ -41,9 +41,10 @@ func NewPanelServer(deps PanelDeps) *PanelServer {
 		"json":        toJSON,
 		"timeAgo":     timeAgo,
 		"statusBadge": statusBadge,
-		"truncate":    truncate,
-		"add":         add,
-		"subtract":    subtract,
+		"truncate":      truncate,
+		"add":           add,
+		"subtract":      subtract,
+		"templateNames": templateNames,
 	}
 
 	// Parse shared templates (base layout + partials).

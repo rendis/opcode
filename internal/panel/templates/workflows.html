@@ -3,19 +3,26 @@
     <h1>Workflows</h1>
 </div>
 
-<form class="filter-bar" method="get" action="/workflows">
-    <select name="status">
-        <option value="">All Statuses</option>
-        <option value="active" {{if eq .Status "active"}}selected{{end}}>Active</option>
-        <option value="suspended" {{if eq .Status "suspended"}}selected{{end}}>Suspended</option>
-        <option value="completed" {{if eq .Status "completed"}}selected{{end}}>Completed</option>
-        <option value="failed" {{if eq .Status "failed"}}selected{{end}}>Failed</option>
-        <option value="cancelled" {{if eq .Status "cancelled"}}selected{{end}}>Cancelled</option>
-        <option value="pending" {{if eq .Status "pending"}}selected{{end}}>Pending</option>
-    </select>
-    <input type="text" name="agent_id" placeholder="Agent ID" value="{{.AgentID}}">
-    <button type="submit" class="btn btn-secondary btn-filter">Filter</button>
-</form>
+<div class="filter-bar">
+    <form method="get" action="/workflows" style="display: flex; align-items: center; gap: 0.75rem; margin: 0; flex-wrap: wrap;">
+        <select name="status" style="margin: 0; width: auto; min-width: 160px;">
+            <option value="">All Statuses</option>
+            <option value="active" {{if eq .Status "active"}}selected{{end}}>Active</option>
+            <option value="suspended" {{if eq .Status "suspended"}}selected{{end}}>Suspended</option>
+            <option value="completed" {{if eq .Status "completed"}}selected{{end}}>Completed</option>
+            <option value="failed" {{if eq .Status "failed"}}selected{{end}}>Failed</option>
+            <option value="cancelled" {{if eq .Status "cancelled"}}selected{{end}}>Cancelled</option>
+            <option value="pending" {{if eq .Status "pending"}}selected{{end}}>Pending</option>
+        </select>
+        <select name="agent_id" style="margin: 0; width: auto; min-width: 160px;">
+            <option value="">All Agents</option>
+            {{range .Agents}}
+            <option value="{{.ID}}" {{if eq .ID $.AgentID}}selected{{end}}>{{.ID}}</option>
+            {{end}}
+        </select>
+        <button type="submit" class="btn btn-secondary btn-filter" style="width: auto; margin: 0;">Filter</button>
+    </form>
+</div>
 
 {{if .Workflows}}
 <table>

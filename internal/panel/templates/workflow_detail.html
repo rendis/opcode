@@ -28,10 +28,17 @@
     <div id="tab-steps" class="tab-content active" hx-ext="sse" sse-connect="/sse/workflows/{{.Workflow.ID}}">
         {{if .Steps}}
         <table>
+            <colgroup>
+                <col style="width: 25%">
+                <col style="width: 15%">
+                <col style="width: 18%">
+                <col style="width: 10%">
+                <col style="width: 32%">
+            </colgroup>
             <thead>
                 <tr>
                     <th>Step ID</th>
-                    <th>Status</th>
+                    <th style="text-align: center">Status</th>
                     <th>Duration</th>
                     <th>Retries</th>
                     <th>Details</th>
@@ -41,7 +48,7 @@
                 {{range .Steps}}
                 <tr>
                     <td class="mono">{{.StepID}}</td>
-                    <td><span class="badge {{statusBadge (printf "%s" .Status)}}">{{.Status}}</span></td>
+                    <td style="text-align: center"><span class="badge {{statusBadge (printf "%s" .Status)}}">{{.Status}}</span></td>
                     <td class="text-secondary">
                         {{if gt .DurationMs 0}}{{.DurationMs}}ms{{else}}&mdash;{{end}}
                         {{if gt .DurationMs 0}}

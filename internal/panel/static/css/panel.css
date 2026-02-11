@@ -25,6 +25,9 @@
   --op-muted: #495057;
   --op-accent: #7b2ff7;
   --op-accent-hover: #9054f7;
+  --op-amber: #F59E0B;
+  --op-amber-dim: rgba(245, 158, 11, 0.15);
+  --op-amber-glow: rgba(245, 158, 11, 0.08);
 
   --op-sidebar-width: 240px;
   --op-radius: 8px;
@@ -110,7 +113,7 @@ pre {
   display: flex;
   flex-direction: column;
   z-index: 100;
-  overflow-y: auto;
+  overflow-y: hidden;
 }
 
 .sidebar-header {
@@ -123,7 +126,7 @@ pre {
   font-size: 1.15rem;
   font-weight: 700;
   letter-spacing: 0.5px;
-  color: var(--op-text-primary);
+  color: var(--op-amber);
 }
 
 .sidebar-header .version {
@@ -132,46 +135,51 @@ pre {
   margin-top: 2px;
 }
 
-.sidebar ul {
+nav.sidebar ul {
   list-style: none;
   padding: 0.5rem 0;
   margin: 0;
   flex: 1;
+  flex-direction: column;
+  align-items: stretch;
 }
 
-.sidebar li {
+nav.sidebar ul li {
   margin: 0;
   padding: 0;
 }
 
-.sidebar li a {
+nav.sidebar ul li a {
   display: flex;
   align-items: center;
   gap: 0.65rem;
-  padding: 0.6rem 1.25rem;
+  padding: 0.5rem 1.25rem;
+  margin: 0;
   color: var(--op-text-secondary);
   font-size: 0.875rem;
   font-weight: 500;
   border-left: 3px solid transparent;
   transition: all var(--op-transition);
+  line-height: 1.4;
 }
 
-.sidebar li a:hover {
-  background: rgba(123, 47, 247, 0.08);
+nav.sidebar ul li a:hover {
+  background: var(--op-amber-glow);
   color: var(--op-text-primary);
 }
 
-.sidebar li.active a {
-  background: rgba(123, 47, 247, 0.12);
-  color: var(--op-accent);
-  border-left-color: var(--op-accent);
+nav.sidebar ul li.active a {
+  background: var(--op-amber-glow);
+  color: var(--op-amber);
+  border-left-color: var(--op-amber);
   font-weight: 600;
 }
 
-.sidebar li a .nav-icon {
+nav.sidebar ul li a .nav-icon {
   width: 18px;
-  text-align: center;
-  font-size: 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   flex-shrink: 0;
 }
 
@@ -294,7 +302,7 @@ pre {
 }
 
 .card:hover {
-  border-color: rgba(123, 47, 247, 0.3);
+  border-color: rgba(245, 158, 11, 0.25);
 }
 
 .card-header {
@@ -403,6 +411,7 @@ table {
   width: 100%;
   border-collapse: collapse;
   font-size: 0.85rem;
+  table-layout: fixed;
 }
 
 thead th {
@@ -432,6 +441,13 @@ tbody tr:hover {
 tbody td {
   padding: 0.55rem 0.75rem;
   vertical-align: middle;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+tbody td .json-viewer {
+  max-width: 100%;
+  overflow-x: auto;
 }
 
 td.mono {
@@ -445,7 +461,7 @@ tr.clickable {
   cursor: pointer;
 }
 tr.clickable:hover {
-  background: rgba(123, 47, 247, 0.08);
+  background: var(--op-amber-glow);
 }
 
 /* ================================================================
@@ -472,11 +488,20 @@ tr.clickable:hover {
   min-width: 140px;
 }
 
+.filter-bar select {
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%23a0a0b0' d='M1 1l5 5 5-5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.75rem center;
+  padding-right: 2rem;
+}
+
 .filter-bar select:focus,
 .filter-bar input:focus {
-  border-color: var(--op-accent);
+  border-color: var(--op-amber);
   outline: none;
-  box-shadow: 0 0 0 2px rgba(123, 47, 247, 0.2);
+  box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.2);
 }
 
 .filter-bar .btn-filter {
@@ -514,12 +539,12 @@ tr.clickable:hover {
 }
 
 .btn-secondary {
-  background: transparent;
+  background: var(--op-bg-surface);
   color: var(--op-text-secondary);
   border-color: var(--op-border);
 }
 .btn-secondary:hover {
-  background: var(--op-bg-surface);
+  background: var(--op-bg-primary);
   color: var(--op-text-primary);
   border-color: var(--op-text-muted);
 }
@@ -827,7 +852,7 @@ tr.clickable:hover {
   color: var(--op-text-secondary);
   overflow-x: auto;
   white-space: pre;
-  max-height: 300px;
+  max-height: 70vh;
 }
 
 /* ================================================================
@@ -931,12 +956,21 @@ tr.clickable:hover {
   padding: 0.5rem 0.75rem;
 }
 
+.form-group select {
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%23a0a0b0' d='M1 1l5 5 5-5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.75rem center;
+  padding-right: 2rem;
+}
+
 .form-group input:focus,
 .form-group textarea:focus,
 .form-group select:focus {
-  border-color: var(--op-accent);
+  border-color: var(--op-amber);
   outline: none;
-  box-shadow: 0 0 0 2px rgba(123, 47, 247, 0.2);
+  box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.2);
 }
 
 .modal-overlay {
@@ -990,11 +1024,15 @@ tr.clickable:hover {
 /* ================================================================
    20. Toggle Switch (Scheduler enabled/disabled)
    ================================================================ */
+label.toggle,
+form label.toggle,
 .toggle {
   position: relative;
   display: inline-block;
   width: 36px;
   height: 20px;
+  padding: 0;
+  cursor: pointer;
 }
 
 .toggle input {
@@ -1183,7 +1221,7 @@ tr.clickable:hover {
 }
 
 .agent-card:hover {
-  border-color: rgba(123, 47, 247, 0.3);
+  border-color: rgba(245, 158, 11, 0.25);
 }
 
 .agent-card .agent-name {
@@ -1244,7 +1282,7 @@ tr.clickable:hover {
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--op-text-muted);
+  background: var(--op-amber);
 }
 
 /* ================================================================
