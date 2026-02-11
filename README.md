@@ -152,6 +152,7 @@ Add opcode to your MCP client configuration (`.mcp.json`):
 {
   "mcpServers": {
     "opcode": {
+      "type": "sse",
       "url": "http://localhost:4100/sse"
     }
   }

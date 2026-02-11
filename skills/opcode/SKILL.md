@@ -136,6 +136,7 @@ Connect to the running daemon via SSE URL:
 {
   "mcpServers": {
     "opcode": {
+      "type": "sse",
       "url": "http://localhost:4100/sse"
     }
   }
