@@ -41,6 +41,12 @@ func main() {
 			return
 		case "serve":
 			// fall through to serve
+		case "update":
+			runUpdate(os.Args[2:])
+			return
+		case "version":
+			printVersion()
+			return
 		}
 	}
 	runServe()
@@ -49,11 +55,19 @@ func main() {
 func runServe() {
 	cfg := loadConfig()
 
-	// --- Logging ---
-	logLevel := parseLogLevel(cfg.LogLevel)
-	innerHandler := slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel})
+	// --- Pidfile ---
+	if err := writePidfile(); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: cannot write pidfile: %v\n", err)
+	}
+	defer removePidfile()
+
+	// --- Logging (LevelVar for hot-reload via SIGHUP) ---
+	var levelVar slog.LevelVar
+	levelVar.Set(parseLogLevel(cfg.LogLevel))
+	innerHandler := slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: &levelVar})
 	logger := slog.New(logging.NewCorrelationHandler(innerHandler))
 	slog.SetDefault(logger)
+	logger.Info("opcode starting", slog.String("version", version))
 
 	// --- Data directory ---
 	if dir := filepath.Dir(cfg.DBPath); dir != "." {
@@ -170,7 +184,7 @@ func runServe() {
 	// --- Recovery ---
 	recoverOrphanedWorkflows(context.Background(), libsqlStore, eventLog, logger)
 
-	// --- Panel ---
+	// --- Panel (always created, conditionally mounted) ---
 	panelSrv := panel.NewPanelServer(panel.PanelDeps{
 		Store:    libsqlStore,
 		Executor: executor,
@@ -181,13 +195,13 @@ func runServe() {
 	// --- SSE Transport ---
 	sseServer := mcpServer.NewSSEServer(cfg.BaseURL)
 
-	// --- Compose HTTP mux: MCP SSE + Panel on same port ---
-	mux := http.NewServeMux()
-	mux.Handle("/sse", sseServer)
-	mux.Handle("/message", sseServer)
-	mux.Handle("/", panelSrv.Handler())
-
-	httpSrv := &http.Server{Addr: cfg.ListenAddr, Handler: mux}
+	// --- Compose HTTP mux: MCP SSE + conditional Panel ---
+	var panelHandler http.Handler
+	if cfg.Panel {
+		panelHandler = panelSrv.Handler()
+	}
+	swapper := newHandlerSwapper(buildMux(sseServer, panelHandler))
+	httpSrv := &http.Server{Addr: cfg.ListenAddr, Handler: swapper}
 
 	// --- Start ---
 	ctx, cancel := context.WithCancel(context.Background())
@@ -201,6 +215,38 @@ func runServe() {
 	if err := sched.RecoverMissed(ctx); err != nil {
 		logger.Warn("scheduler recovery failed", slog.Any("error", err))
 	}
+
+	// SIGHUP: hot-reload configuration.
+	sighupCh := make(chan os.Signal, 1)
+	signal.Notify(sighupCh, syscall.SIGHUP)
+	go func() {
+		for range sighupCh {
+			newCfg := loadConfig()
+			diff := diffConfigs(cfg, newCfg)
+
+			if diff.LogLevelChanged {
+				levelVar.Set(parseLogLevel(newCfg.LogLevel))
+				logger.Info("log level reloaded", slog.String("level", newCfg.LogLevel))
+			}
+
+			if diff.PanelChanged {
+				var ph http.Handler
+				if newCfg.Panel {
+					ph = panelSrv.Handler()
+				}
+				swapper.Swap(buildMux(sseServer, ph))
+				logger.Info("panel toggled", slog.Bool("panel", newCfg.Panel))
+			}
+
+			if len(diff.RestartNeeded) > 0 {
+				logger.Warn("config changes require restart",
+					slog.Any("fields", diff.RestartNeeded))
+			}
+
+			cfg = newCfg
+			logger.Info("configuration reloaded")
+		}
+	}()
 
 	// Graceful shutdown on SIGTERM/SIGINT.
 	sigCh := make(chan os.Signal, 1)
@@ -222,7 +268,8 @@ func runServe() {
 
 	logger.Info("opcode server starting",
 		slog.String("addr", cfg.ListenAddr),
-		slog.String("panel", "http://"+cfg.ListenAddr),
+		slog.String("version", version),
+		slog.Bool("panel", cfg.Panel),
 	)
 	if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		if isAddrInUse(err) {
@@ -245,6 +292,29 @@ func runServe() {
 	}
 
 	logger.Info("opcode shutdown complete")
+}
+
+// buildMux creates an http.ServeMux with SSE routes and an optional panel handler.
+func buildMux(sseHandler http.Handler, panelHandler http.Handler) http.Handler {
+	mux := http.NewServeMux()
+	mux.Handle("/sse", sseHandler)
+	mux.Handle("/message", sseHandler)
+	if panelHandler != nil {
+		mux.Handle("/", panelHandler)
+	}
+	return mux
+}
+
+func writePidfile() error {
+	dir := filepath.Dir(pidPath())
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	return os.WriteFile(pidPath(), []byte(strconv.Itoa(os.Getpid())), 0o644)
+}
+
+func removePidfile() {
+	_ = os.Remove(pidPath())
 }
 
 // recoverOrphanedWorkflows transitions any active workflows to suspended on startup.

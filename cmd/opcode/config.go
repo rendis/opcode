@@ -15,6 +15,7 @@ type Config struct {
 	DBPath     string `json:"db_path"`
 	LogLevel   string `json:"log_level"`
 	PoolSize   int    `json:"pool_size"`
+	Panel      bool   `json:"panel"`
 }
 
 func defaultConfig() Config {
@@ -64,6 +65,9 @@ func loadConfig() Config {
 			cfg.PoolSize = n
 		}
 	}
+	if v := os.Getenv("OPCODE_PANEL"); v != "" {
+		cfg.Panel = v == "true" || v == "1"
+	}
 
 	// Derive base_url from listen_addr if empty.
 	if cfg.BaseURL == "" {
@@ -71,4 +75,38 @@ func loadConfig() Config {
 	}
 
 	return cfg
+}
+
+// configDiff describes what changed between two configurations.
+type configDiff struct {
+	PanelChanged    bool
+	LogLevelChanged bool
+	RestartNeeded   []string // fields that require a server restart
+}
+
+func diffConfigs(old, new Config) configDiff {
+	var d configDiff
+	if old.Panel != new.Panel {
+		d.PanelChanged = true
+	}
+	if old.LogLevel != new.LogLevel {
+		d.LogLevelChanged = true
+	}
+	if old.ListenAddr != new.ListenAddr {
+		d.RestartNeeded = append(d.RestartNeeded, "listen_addr")
+	}
+	if old.BaseURL != new.BaseURL {
+		d.RestartNeeded = append(d.RestartNeeded, "base_url")
+	}
+	if old.DBPath != new.DBPath {
+		d.RestartNeeded = append(d.RestartNeeded, "db_path")
+	}
+	if old.PoolSize != new.PoolSize {
+		d.RestartNeeded = append(d.RestartNeeded, "pool_size")
+	}
+	return d
+}
+
+func pidPath() string {
+	return filepath.Join(opcodeDir(), "opcode.pid")
 }

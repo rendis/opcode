@@ -11,7 +11,9 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
+	"syscall"
 )
 
 const mermaidASCIIVersion = "1.1.0"
@@ -23,6 +25,7 @@ func runInstall(args []string) {
 	dbPath := fs.String("db-path", "", "database path (default: ~/.opcode/opcode.db)")
 	logLevel := fs.String("log-level", "info", "log level: debug, info, warn, error")
 	poolSize := fs.Int("pool-size", 10, "worker pool size")
+	panelFlag := fs.Bool("panel", false, "enable web panel")
 	vaultKey := fs.String("vault-key", "", "vault passphrase (memory only, not persisted to disk)")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(1)
@@ -39,6 +42,7 @@ func runInstall(args []string) {
 		BaseURL:    *baseURL,
 		LogLevel:   *logLevel,
 		PoolSize:   *poolSize,
+		Panel:      *panelFlag,
 	}
 	if *dbPath != "" {
 		cfg.DBPath = *dbPath
@@ -65,8 +69,37 @@ func runInstall(args []string) {
 		os.Setenv("OPCODE_VAULT_KEY", *vaultKey)
 	}
 
-	// Start the server.
+	// Signal running server to reload, or start a new one.
+	if signalRunningServer() {
+		return
+	}
 	runServe()
+}
+
+// signalRunningServer sends SIGHUP to a running opcode server (via pidfile).
+// Returns true if the server was signaled (caller should NOT start a new one).
+func signalRunningServer() bool {
+	data, err := os.ReadFile(pidPath())
+	if err != nil {
+		return false
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		return false
+	}
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	// Check if process is alive.
+	if err := proc.Signal(syscall.Signal(0)); err != nil {
+		return false
+	}
+	if err := proc.Signal(syscall.SIGHUP); err != nil {
+		return false
+	}
+	fmt.Printf("Signaled running server (PID %d) to reload configuration\n", pid)
+	return true
 }
 
 // installMermaidASCII downloads the mermaid-ascii binary to binDir.
