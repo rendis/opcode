@@ -1,12 +1,12 @@
 <div align="center">
   <img src="assets/gopher.png" alt="OPCODE Gopher" width="160"/>
 
-  <picture>
+<picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/banner-dark.svg">
     <img alt="OPCODE — Agent-first workflow orchestration engine" src="assets/banner-light.svg" width="100%">
   </picture>
 
-[![Go](https://img.shields.io/badge/Go-1.25+-00ADD8?style=flat&logo=go&logoColor=white)](https://go.dev) [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE) [![Tests](https://img.shields.io/badge/Tests-929_passing-success)](https://github.com/rendis/opcode)
+[![Go](https://img.shields.io/badge/Go-1.25+-00ADD8?style=flat&logo=go&logoColor=white)](https://go.dev) [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE) [![Tests](https://img.shields.io/badge/Tests-981_passing-success)](https://github.com/rendis/opcode)
 
 </div>
 
@@ -14,7 +14,9 @@ Agent-first workflow orchestration engine. OPCODE lets AI agents define, execute
 
 ## Key Features
 
-- **MCP-native interface** -- Five tools (`opcode.run`, `opcode.status`, `opcode.signal`, `opcode.define`, `opcode.query`) exposed over stdio for seamless agent integration
+- **MCP-native interface** -- Six tools (`opcode.run`, `opcode.status`, `opcode.signal`, `opcode.define`, `opcode.query`, `opcode.diagram`) exposed over SSE for seamless agent integration
+- **Workflow diagrams** -- Generate visual DAG representations in ASCII (CLI), Mermaid (markdown), or PNG (graphviz) with optional runtime status overlay
+- **Web management panel** -- Built-in dashboard at the same SSE port for multi-agent monitoring, decision resolution, and workflow management
 - **DAG-based execution** -- Steps execute level-by-level with automatic parallelism; dependencies are validated and cycle-detected at parse time
 - **Reasoning nodes** -- First-class human-in-the-loop / agent-in-the-loop decision points that suspend workflows and resume on signal
 - **Event sourcing** -- Append-only event log with materialized step states; full replay for resume after crash or suspension
@@ -36,6 +38,8 @@ Agent-first workflow orchestration engine. OPCODE lets AI agents define, execute
 - [Examples](#examples)
 - [Architecture](#architecture)
 - [MCP Tools Reference](#mcp-tools-reference)
+- [Workflow Diagrams](#workflow-diagrams)
+- [Web Panel](#web-panel)
 - [Workflow Definition Format](#workflow-definition-format)
 - [Built-in Actions](#built-in-actions)
 - [Expression Interpolation](#expression-interpolation)
@@ -71,9 +75,11 @@ bunx clawhub@latest install opcode
 | ---------------------- | ------------------------------------------------------------------------------------ |
 | **Language**           | Go 1.25+                                                                             |
 | **Database**           | Embedded libSQL (via `go-libsql`, CGO required)                                      |
-| **MCP Server**         | `mcp-go` (stdio transport)                                                           |
+| **MCP Server**         | `mcp-go` (SSE transport)                                                             |
 | **Expression Engines** | CEL (`cel-go`), GoJQ (`gojq`), Expr (`expr-lang/expr`)                               |
 | **Validation**         | JSON Schema Draft 2020-12 (`santhosh-tekuri/jsonschema/v6`)                          |
+| **Diagrams**           | `goccy/go-graphviz` (WASM-based, no CGO), ASCII box-drawing, Mermaid syntax          |
+| **Web Panel**          | Go `html/template`, htmx, Pico CSS, mermaid.js, SSE live updates                    |
 | **Scheduling**         | `robfig/cron/v3`                                                                     |
 | **IDs**                | UUIDs (`google/uuid`)                                                                |
 | **Testing**            | `testify`, embedded libSQL for integration tests                                     |
@@ -120,37 +126,33 @@ This downloads all Go modules and compiles the project. The CGO dependency on `g
 go build -C /path/to/opcode -o opcode ./cmd/opcode/
 ```
 
-This produces the `opcode` binary in the project root. The binary is a self-contained MCP server that communicates over stdio.
+This produces the `opcode` binary in the project root. The binary is a self-contained MCP server that communicates over SSE.
 
 ### 4. Run the Server
 
 ```bash
-# Minimal: uses defaults (opcode.db in current directory, no vault)
-./opcode
-
-# With configuration
-OPCODE_DB_PATH=/var/data/opcode.db \
-OPCODE_VAULT_KEY="my-secret-passphrase" \
-OPCODE_POOL_SIZE=20 \
-OPCODE_LOG_LEVEL=debug \
-./opcode
+opcode install --listen-addr :4100 --vault-key "my-secret-passphrase"
 ```
 
-The server starts listening on stdin/stdout for MCP JSON-RPC messages. It is designed to be launched as a subprocess by an MCP client (such as Claude Desktop, an AI agent framework, or any MCP-compatible host).
+This writes `~/.opcode/settings.json` and immediately starts the daemon. `--vault-key` is memory-only (not persisted to disk). The web panel is available at `http://localhost:4100`.
+
+If the process stops, restart it with:
+
+```bash
+OPCODE_VAULT_KEY="my-secret-passphrase" opcode
+```
+
+> For production, set `OPCODE_VAULT_KEY` as an env var in your process manager (systemd, launchd). The `install` step is only needed once to generate `settings.json`.
 
 ### 5. Configure as an MCP Server
 
-Add opcode to your MCP client configuration. For example, in Claude Desktop's `claude_desktop_config.json`:
+Add opcode to your MCP client configuration (`.mcp.json`):
 
 ```json
 {
   "mcpServers": {
     "opcode": {
-      "command": "/path/to/opcode",
-      "env": {
-        "OPCODE_DB_PATH": "/path/to/opcode.db",
-        "OPCODE_VAULT_KEY": "your-vault-passphrase"
-      }
+      "url": "http://localhost:4100/sse"
     }
   }
 }
@@ -162,7 +164,7 @@ Add opcode to your MCP client configuration. For example, in Claude Desktop's `c
 go test -C /path/to/opcode ./... -count=1 -timeout 60s
 ```
 
-All 903 tests should pass. The tests use embedded libSQL with temporary database files and do not require any external services.
+All 981 tests should pass. The tests use embedded libSQL with temporary database files and do not require any external services.
 
 ## Examples
 
@@ -187,8 +189,8 @@ Each example includes a `workflow.json` and a `README.md` with step-by-step expl
 
 ```plaintext
 opcode/
-├── cmd/opcode/                  # Entry point, DI wiring, MCP server startup
-│   └── main.go                  # Assembles all components and starts stdio transport
+├── cmd/opcode/                  # Entry point, DI wiring, SSE daemon + panel
+│   └── main.go                  # Assembles all components, HTTP server (MCP SSE + panel)
 ├── internal/
 │   ├── actions/                 # Action interface and built-in action implementations
 │   │   ├── action.go            # Action, ActionRegistry, ActionInput/Output interfaces
@@ -199,7 +201,7 @@ opcode/
 │   │   ├── shell.go             # Shell action (shell.exec) with isolator integration
 │   │   ├── crypto.go            # Crypto actions (crypto.hash, crypto.hmac, crypto.uuid, crypto.encode, crypto.decode)
 │   │   ├── assert.go            # Assertion actions (assert.equal, assert.schema, assert.truthy)
-│   │   └── workflow.go          # Workflow actions (workflow.run, workflow.emit, workflow.context, workflow.fail, workflow.log)
+│   │   └── workflow.go          # Workflow actions (workflow.run, workflow.emit, workflow.context, workflow.fail, workflow.log, workflow.notify)
 │   ├── engine/                  # Core execution engine
 │   │   ├── executor.go          # Executor interface + implementation (Run, Resume, Signal, Extend, Cancel, Status)
 │   │   ├── executor_flow.go     # Flow control step execution (condition, loop, parallel, wait)
@@ -216,6 +218,19 @@ opcode/
 │   │   ├── expr.go              # Expr engine for logic expressions
 │   │   ├── interpolation.go     # ${{...}} two-pass interpolation (variables then secrets)
 │   │   └── scope.go             # InterpolationScope builder
+│   ├── diagram/                 # Workflow visualization
+│   │   ├── model.go            # DiagramModel intermediate representation (nodes, edges, subgraphs)
+│   │   ├── builder.go          # WorkflowDefinition + StepStates → DiagramModel
+│   │   ├── ascii.go            # ASCII renderer (box-drawing characters, status tags)
+│   │   ├── mermaid.go          # Mermaid flowchart renderer (classDef status colors)
+│   │   └── graphviz.go         # PNG renderer via go-graphviz (DOT graph → image)
+│   ├── panel/                   # Web management panel
+│   │   ├── server.go           # PanelServer, HTTP handler, template parsing, embed.FS
+│   │   ├── handlers.go         # Page handlers (dashboard, workflows, templates, decisions, etc.)
+│   │   ├── api.go              # POST/DELETE endpoints (resolve decision, cancel workflow, etc.)
+│   │   ├── sse.go              # EventHub → SSE bridge (global + per-workflow streams)
+│   │   ├── templates/          # Go html/templates (base layout + per-page)
+│   │   └── static/             # Embedded assets (pico.css, htmx.js, mermaid.js, panel.css)
 │   ├── store/                   # Persistence layer
 │   │   ├── store.go             # Store interface (~20 methods)
 │   │   ├── types.go             # Domain types (Workflow, Event, StepState, PendingDecision, etc.)
@@ -262,8 +277,8 @@ opcode/
 │   │   ├── signal.go            # Signal types, DAGMutation, VariableSet
 │   │   └── validation.go        # ValidationResult, ValidationIssue
 │   └── mcp/                     # MCP server and tool definitions
-│       ├── server.go            # OpcodeServer (5 tools, stdio transport)
-│       └── tools.go             # Tool handlers (run, status, signal, define, query)
+│       ├── server.go            # OpcodeServer (6 tools, SSE transport)
+│       └── tools.go             # Tool handlers (run, status, signal, define, query, diagram)
 ├── tests/
 │   └── e2e/                     # End-to-end integration tests
 ├── scripts/
@@ -278,7 +293,10 @@ opcode/
 ```mermaid
 graph TB
     Agent["MCP Client (Agent)<br/>Claude, AI framework, etc."]
-    MCP["MCP Server (pkg/mcp)<br/>opcode.run / .status / .signal<br/>opcode.define / .query"]
+    Browser["Web Browser"]
+    MCP["MCP Server (pkg/mcp)<br/>opcode.run / .status / .signal<br/>opcode.define / .query / .diagram"]
+    Panel["Web Panel (internal/panel)<br/>Dashboard, Workflows, Decisions,<br/>Templates, Scheduler, Events"]
+    Diagram["Diagram Engine<br/>ASCII / Mermaid / PNG"]
     Exec["Executor (engine)<br/>DAG parse → level walk → WorkerPool"]
     Actions["Actions Registry<br/>built-in + plugins"]
     FSMs["FSMs<br/>Workflow + Step"]
@@ -287,9 +305,14 @@ graph TB
     Isolation["Isolation<br/>cgroups v2 / fallback"]
     Expressions["Expressions<br/>CEL, GoJQ, Expr, ${{}}"]
     Store["Store (libSQL)<br/>workflows, events, step_state,<br/>decisions, templates, secrets"]
+    Hub["EventHub<br/>SSE live updates"]
 
-    Agent -->|"JSON-RPC over stdio"| MCP
+    Agent -->|"JSON-RPC over SSE"| MCP
+    Browser -->|"HTTP + SSE"| Panel
     MCP --> Exec
+    MCP --> Diagram
+    Panel --> Store
+    Panel --> Hub
     Exec --> Actions
     Exec --> FSMs
     Exec --> Retry
@@ -423,7 +446,7 @@ An additional `audit_log` table is defined for flag-activated agent action audit
 
 ## MCP Tools Reference
 
-OPCODE exposes five MCP tools over stdio:
+OPCODE exposes six MCP tools over SSE:
 
 ### opcode.run
 
@@ -493,6 +516,163 @@ Query workflows, events, or templates with filtering.
 | `workflows` | `status`, `agent_id`, `since` (RFC3339), `limit`         |
 | `events`    | `workflow_id`, `step_id`, `event_type`, `since`, `limit` |
 | `templates` | `name`, `agent_id`, `limit`                              |
+
+### Agent Identity
+
+Agents identify themselves by passing an `agent_id` string in every tool call. Opcode auto-registers new agents in the `agents` table on first contact (type: `llm`). There is no authentication — agents choose their own ID.
+
+**In multi-agent setups**, each agent should use a stable, unique ID so workflows are correctly attributed. Use `opcode.query` with `filter: { "agent_id": "my-agent" }` to list only workflows owned by a specific agent.
+
+Agent types: `llm` (default for auto-registered), `system`, `human`, `service`.
+
+### opcode.diagram
+
+Generate a visual representation of a workflow DAG.
+
+| Parameter        | Required | Description                                                    |
+| ---------------- | -------- | -------------------------------------------------------------- |
+| `template_name`  | No*      | Template to visualize (structure preview before execution)     |
+| `version`        | No       | Template version (default: latest)                             |
+| `workflow_id`    | No*      | Running/completed workflow to visualize (with runtime status)  |
+| `format`         | Yes      | Output format: `ascii`, `mermaid`, or `image`                  |
+| `include_status` | No       | Show runtime status overlay (default: true if workflow_id set) |
+
+\* One of `template_name` or `workflow_id` is required.
+
+**Use cases:**
+- `template_name` — Preview a template's DAG structure before running it
+- `workflow_id` — Visualize a workflow with live step status (completed, running, suspended, pending)
+- `format: "ascii"` — Text output for CLI agents and terminal display
+- `format: "mermaid"` — Flowchart syntax for markdown renderers and web UIs
+- `format: "image"` — Base64-encoded PNG for visual channels (Telegram, WhatsApp, Slack)
+
+## Workflow Diagrams
+
+OPCODE generates workflow DAG visualizations in three formats. The `opcode.diagram` tool and the web panel both use the same `internal/diagram` engine.
+
+### ASCII
+
+Text-based box-drawing diagram for CLI agents and terminal output:
+
+```
+=== Workflow ===
+
+┌───────┐
+│ Start │
+└───────┘
+       │
+       ▼
+┌────────────┐
+│ fetch-data │
+│ [OK]       │
+│ 450ms      │
+└────────────┘
+       │
+       ▼
+┌──────────┐
+│ validate │
+│ [OK]     │
+│ 12ms     │
+└──────────┘
+       │
+       ▼
+┌────────┐
+│ decide │
+│ [WAIT] │
+└────────┘
+       │
+       ▼
+┌─────────┐
+│ process │
+│ [PEND]  │
+└─────────┘
+       │
+       ▼
+┌────────┐
+│ notify │
+│ [PEND] │
+└────────┘
+       │
+       ▼
+┌─────┐
+│ End │
+└─────┘
+```
+
+Status tags: `[OK]` completed, `[FAIL]` failed, `[RUN]` running, `[WAIT]` suspended, `[PEND]` pending, `[SKIP]` skipped, `[RETRY]` retrying.
+
+### Mermaid
+
+Flowchart syntax with status-colored nodes, renderable in GitHub, web UIs, and the panel:
+
+```mermaid
+graph TD
+    __start__(("Start"))
+    fetch_data["fetch-data"]
+    validate["validate"]
+    decide{{"decide"}}
+    process["process"]
+    notify["notify"]
+    __end__(("End"))
+    __start__ --> fetch_data
+    process --> notify
+    fetch_data --> validate
+    validate --> decide
+    decide --> process
+    notify --> __end__
+
+    classDef completed fill:#2d6a2d,stroke:#1a4a1a,color:#fff
+    classDef failed fill:#8b1a1a,stroke:#5c0e0e,color:#fff
+    classDef running fill:#1a5276,stroke:#0e3a52,color:#fff
+    classDef suspended fill:#b7791a,stroke:#8a5c14,color:#fff
+    classDef pending fill:#6b6b6b,stroke:#4a4a4a,color:#fff
+    classDef skipped fill:#4a4a4a,stroke:#333,color:#aaa,stroke-dasharray:5 5
+    class fetch_data completed
+    class validate completed
+    class decide suspended
+    class process pending
+    class notify pending
+```
+
+### PNG (Graphviz)
+
+Rendered locally via `goccy/go-graphviz` — no external services. Returned as base64-encoded PNG by the MCP tool.
+
+<div align="center">
+  <img src="docs/assets/diagram-sample.png" alt="Workflow diagram PNG output" width="400"/>
+</div>
+
+Node shapes encode step type: rectangles for actions, diamonds for reasoning/conditions, circles for start/end. Colors indicate runtime status: green (completed), red (failed), blue (running), amber (suspended), gray (pending).
+
+## Web Panel
+
+OPCODE includes a built-in web management panel served on the same port as the MCP SSE endpoint (default `:4100`). No additional configuration is needed — browse to `http://localhost:4100` when the daemon is running.
+
+### Stack
+
+- **Go `html/template`** with embedded static assets (`embed.FS`)
+- **htmx** for dynamic partial updates without page reloads
+- **Pico CSS** (dark mode) with custom panel styles
+- **mermaid.js** for client-side Mermaid diagram rendering
+- **SSE** for live event streaming (EventHub → browser)
+
+### Pages
+
+| Page               | Description                                                              |
+| ------------------ | ------------------------------------------------------------------------ |
+| **Dashboard**      | System counters, per-agent overview table, pending decisions, activity   |
+| **Workflows**      | Filterable workflow list (by status, agent), pagination                  |
+| **Workflow Detail** | Live DAG diagram, step states table, events timeline, cancel button     |
+| **Templates**      | Template list, create via JSON paste (auto-versions), definition viewer  |
+| **Template Detail** | Version selector, Mermaid diagram preview, definition JSON             |
+| **Decisions**      | Pending decision queue with resolve/reject forms                         |
+| **Scheduler**      | Cron job list, create/edit/delete, enable/disable toggle                 |
+| **Events**         | Event log filtered by workflow and/or event type                         |
+| **Agents**         | Registered agents with type and last-seen timestamps                     |
+
+### Live Updates
+
+The dashboard and workflow detail pages receive real-time updates via SSE. The panel subscribes to the EventHub and pushes events to the browser as they occur — no polling.
 
 ## Workflow Definition Format
 
@@ -651,10 +831,23 @@ Filesystem actions respect the isolator's path validation (deny paths, read-only
 | `workflow.context` | Read or update workflow context (accumulated data, agent notes) |
 | `workflow.fail`    | Force-fail the current workflow with a reason                   |
 | `workflow.log`     | Write a structured log entry with workflow context              |
+| `workflow.notify`  | Push a real-time notification to the agent via MCP SSE          |
 
 ### Plugin Actions
 
 External MCP servers can be loaded as plugins. Their tools are discovered via `tools/list` and registered in the action registry under a namespaced prefix (e.g., `github.create_issue`).
+
+### Real-time Notifications
+
+`workflow.notify` pushes notifications to the agent via MCP SSE. The agent decides where to be notified by placing `workflow.notify` steps anywhere in the workflow template. The workflow's `agent_id` determines who receives the notification. Best-effort: if the agent is not connected, the step completes without error.
+
+```json
+{
+  "id": "alert", "action": "workflow.notify",
+  "params": { "message": "Task complete", "data": "${{steps.process.output}}" },
+  "depends_on": ["process"]
+}
+```
 
 ## Expression Interpolation
 
@@ -691,12 +884,16 @@ None. OPCODE runs with sensible defaults and an embedded database.
 
 ### Optional
 
-| Variable           | Description                                           | Default                  |
-| ------------------ | ----------------------------------------------------- | ------------------------ |
-| `OPCODE_DB_PATH`   | Path to the libSQL database file                      | `opcode.db`              |
-| `OPCODE_VAULT_KEY` | Passphrase for the AES-256-GCM secret vault           | (empty = vault disabled) |
-| `OPCODE_POOL_SIZE` | Maximum concurrent step goroutines in the worker pool | `10`                     |
-| `OPCODE_LOG_LEVEL` | Log verbosity:`debug`, `info`, `warn`, `error`        | `info`                   |
+All settings can also be configured via `~/.opcode/settings.json` (created by `opcode install`). Env vars override settings.json.
+
+| Variable             | Description                                           | Default                  |
+| -------------------- | ----------------------------------------------------- | ------------------------ |
+| `OPCODE_DB_PATH`     | Path to the libSQL database file                      | `opcode.db`              |
+| `OPCODE_VAULT_KEY`   | Passphrase for the AES-256-GCM secret vault           | (empty = vault disabled) |
+| `OPCODE_POOL_SIZE`   | Maximum concurrent step goroutines in the worker pool | `10`                     |
+| `OPCODE_LOG_LEVEL`   | Log verbosity:`debug`, `info`, `warn`, `error`        | `info`                   |
+| `OPCODE_LISTEN_ADDR` | TCP listen address                                    | `:4100`                  |
+| `OPCODE_BASE_URL`    | Public base URL for SSE endpoints                     | `http://localhost:4100`  |
 
 When `OPCODE_VAULT_KEY` is not set, the server starts without vault support and logs a warning. Secret interpolation (`${{secrets.KEY}}`) will fail at runtime if the vault is not initialized.
 
@@ -706,7 +903,7 @@ When `OPCODE_VAULT_KEY` is not set, the server starts without vault support and 
 | -------------------------------------------------------------------- | ------------------------------------------ |
 | `go build -C /path/to/opcode ./...`                                  | Build all packages (verify compilation)    |
 | `go build -C /path/to/opcode -o opcode ./cmd/opcode/`                | Build the opcode binary                    |
-| `go test -C /path/to/opcode ./... -count=1 -timeout 60s`             | Run the full test suite (903 tests)        |
+| `go test -C /path/to/opcode ./... -count=1 -timeout 60s`             | Run the full test suite (981 tests)        |
 | `go test -C /path/to/opcode ./internal/engine/ -run TestExecutor -v` | Run a specific test subset                 |
 | `go test -C /path/to/opcode ./internal/engine/ -v`                   | Run all engine tests verbosely             |
 | `go test -C /path/to/opcode ./tests/e2e/ -v`                         | Run end-to-end integration tests           |
@@ -758,7 +955,8 @@ This builds a Docker image from `Dockerfile.test` and runs it with `--privileged
 | `internal/validation/`  | Workflow definition validation, DAG checks, JSON Schema                       |
 | `internal/plugins/`     | Plugin lifecycle, MCP handshake, action discovery                             |
 | `internal/scheduler/`   | Cron parsing, job scheduling, missed-run recovery                             |
-| `pkg/mcp/`              | MCP tool handlers, request/response serialization                             |
+| `internal/diagram/`     | Diagram model building, ASCII/Mermaid/PNG rendering                           |
+| `pkg/mcp/`              | MCP tool handlers (including diagram), request/response serialization         |
 | `pkg/schema/`           | Validation result types                                                       |
 | `tests/e2e/`            | Full end-to-end workflow execution, MCP integration                           |
 
@@ -772,6 +970,15 @@ This builds a Docker image from `Dockerfile.test` and runs it with `--privileged
 ## Deployment
 
 OPCODE is a single Go binary with an embedded database. It does not require external services.
+
+### Setup
+
+```bash
+opcode install --listen-addr :4100
+opcode
+```
+
+Config persists in `~/.opcode/settings.json` — no env vars needed in process managers.
 
 ### Binary Deployment
 
@@ -808,7 +1015,9 @@ FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /opcode /usr/local/bin/opcode
 
-ENV OPCODE_DB_PATH=/data/opcode.db
+RUN opcode install --listen-addr :4100 --db-path /data/opcode.db
+EXPOSE 4100
+
 VOLUME /data
 
 ENTRYPOINT ["opcode"]
@@ -817,6 +1026,7 @@ ENTRYPOINT ["opcode"]
 ```bash
 docker build -t opcode .
 docker run -v opcode-data:/data \
+  -p 4100:4100 \
   -e OPCODE_VAULT_KEY="your-vault-passphrase" \
   opcode
 ```
@@ -905,3 +1115,12 @@ The script builds a Docker image and runs with `--privileged --cgroupns=host`. m
 **Error:** `[PATH_DENIED] write access to "/path" denied`
 
 **Solution:** The isolator's path validation is blocking filesystem access. Check the `ResourceLimits` configuration for `deny_paths`, `read_only_paths`, and `writable_paths`. Deny paths always take precedence.
+
+### Port Already in Use
+
+**Error:** `Error: port :4100 is already in use.`
+
+**Solution:** Another opcode instance or a different service is listening on the configured port. Either:
+
+1. Stop the existing process: `lsof -ti tcp:4100 | xargs kill`
+2. Use a different port: `opcode install --listen-addr :4200`

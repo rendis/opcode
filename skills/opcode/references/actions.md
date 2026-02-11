@@ -8,19 +8,19 @@ Full HTTP request with control over method, headers, body, auth, and redirects.
 
 **Params**:
 
-| Param | Type | Required | Default | Description |
-|-------|------|----------|---------|-------------|
-| `url` | string | yes | - | Request URL |
-| `method` | string | no | `GET` | HTTP method |
-| `headers` | map[string]string | no | - | Request headers |
-| `body` | any | no | - | Request body |
-| `body_encoding` | string | no | `json` | `json`, `form`, `text`, `raw` |
-| `auth` | object | no | - | Auth config (see below) |
-| `timeout` | string | no | `30s` | Request timeout |
-| `follow_redirects` | bool | no | `true` | Follow redirects |
-| `max_redirects` | int | no | `10` | Max redirect hops |
-| `tls_skip_verify` | bool | no | `false` | Skip TLS verification |
-| `fail_on_error_status` | bool | no | `false` | Fail on HTTP 4xx/5xx |
+| Param                  | Type              | Required | Default | Description                   |
+| ---------------------- | ----------------- | -------- | ------- | ----------------------------- |
+| `url`                  | string            | yes      | -       | Request URL                   |
+| `method`               | string            | no       | `GET`   | HTTP method                   |
+| `headers`              | map[string]string | no       | -       | Request headers               |
+| `body`                 | any               | no       | -       | Request body                  |
+| `body_encoding`        | string            | no       | `json`  | `json`, `form`, `text`, `raw` |
+| `auth`                 | object            | no       | -       | Auth config (see below)       |
+| `timeout`              | string            | no       | `30s`   | Request timeout               |
+| `follow_redirects`     | bool              | no       | `true`  | Follow redirects              |
+| `max_redirects`        | int               | no       | `10`    | Max redirect hops             |
+| `tls_skip_verify`      | bool              | no       | `false` | Skip TLS verification         |
+| `fail_on_error_status` | bool              | no       | `false` | Fail on HTTP 4xx/5xx          |
 
 **Auth object**: `{ "type": "bearer|basic|api_key", "token": "...", "username": "...", "password": "...", "header_name": "...", "header_value": "..." }`
 
@@ -40,77 +40,77 @@ All FS actions respect isolator path validation (deny_paths, read_only_paths, wr
 
 ### fs.read
 
-| Param | Type | Required | Default | Description |
-|-------|------|----------|---------|-------------|
-| `path` | string | yes | - | File path |
-| `encoding` | string | no | `auto` | `text`, `base64`, `auto` |
+| Param      | Type   | Required | Default | Description              |
+| ---------- | ------ | -------- | ------- | ------------------------ |
+| `path`     | string | yes      | -       | File path                |
+| `encoding` | string | no       | `auto`  | `text`, `base64`, `auto` |
 
 **Output**: `{ "path": "...", "content": "...", "encoding": "text", "size": 1024 }`
 
 ### fs.write
 
-| Param | Type | Required | Default | Description |
-|-------|------|----------|---------|-------------|
-| `path` | string | yes | - | File path |
-| `content` | string | yes | - | Content to write |
-| `create_dirs` | bool | no | `false` | Create parent directories |
-| `mode` | int | no | `0644` | File permissions |
+| Param         | Type   | Required | Default | Description               |
+| ------------- | ------ | -------- | ------- | ------------------------- |
+| `path`        | string | yes      | -       | File path                 |
+| `content`     | string | yes      | -       | Content to write          |
+| `create_dirs` | bool   | no       | `false` | Create parent directories |
+| `mode`        | int    | no       | `0644`  | File permissions          |
 
 **Output**: `{ "path": "...", "size": 1024 }`
 
 ### fs.append
 
-| Param | Type | Required | Description |
-|-------|------|----------|-------------|
-| `path` | string | yes | File path |
-| `content` | string | yes | Content to append |
+| Param     | Type   | Required | Description       |
+| --------- | ------ | -------- | ----------------- |
+| `path`    | string | yes      | File path         |
+| `content` | string | yes      | Content to append |
 
 **Output**: `{ "path": "...", "size": 2048 }`
 
 ### fs.delete
 
-| Param | Type | Required | Default | Description |
-|-------|------|----------|---------|-------------|
-| `path` | string | yes | - | Path to delete |
-| `recursive` | bool | no | `false` | Delete directories recursively |
+| Param       | Type   | Required | Default | Description                    |
+| ----------- | ------ | -------- | ------- | ------------------------------ |
+| `path`      | string | yes      | -       | Path to delete                 |
+| `recursive` | bool   | no       | `false` | Delete directories recursively |
 
 **Output**: `{ "path": "...", "deleted": true }`
 
 ### fs.list
 
-| Param | Type | Required | Default | Description |
-|-------|------|----------|---------|-------------|
-| `path` | string | yes | - | Directory path |
-| `pattern` | string | no | - | Glob filter pattern |
-| `recursive` | bool | no | `false` | Recurse into subdirectories |
+| Param       | Type   | Required | Default | Description                 |
+| ----------- | ------ | -------- | ------- | --------------------------- |
+| `path`      | string | yes      | -       | Directory path              |
+| `pattern`   | string | no       | -       | Glob filter pattern         |
+| `recursive` | bool   | no       | `false` | Recurse into subdirectories |
 
 **Output**: `{ "path": "...", "entries": [{ "name": "...", "path": "...", "size": 0, "modified_at": "...", "is_dir": false }] }`
 
 ### fs.stat
 
-| Param | Type | Required | Description |
-|-------|------|----------|-------------|
-| `path` | string | yes | File/directory path |
+| Param  | Type   | Required | Description         |
+| ------ | ------ | -------- | ------------------- |
+| `path` | string | yes      | File/directory path |
 
 **Output**: `{ "path": "...", "size": 1024, "modified_at": "2025-01-01T00:00:00Z", "is_dir": false, "permissions": "0644" }`
 
 ### fs.copy
 
-| Param | Type | Required | Default | Description |
-|-------|------|----------|---------|-------------|
-| `src` | string | yes | - | Source path |
-| `dst` | string | yes | - | Destination path |
-| `create_dirs` | bool | no | `false` | Create parent directories |
+| Param         | Type   | Required | Default | Description               |
+| ------------- | ------ | -------- | ------- | ------------------------- |
+| `src`         | string | yes      | -       | Source path               |
+| `dst`         | string | yes      | -       | Destination path          |
+| `create_dirs` | bool   | no       | `false` | Create parent directories |
 
 **Output**: `{ "src": "...", "dst": "...", "size": 1024, "is_dir": false }`
 
 ### fs.move
 
-| Param | Type | Required | Default | Description |
-|-------|------|----------|---------|-------------|
-| `src` | string | yes | - | Source path |
-| `dst` | string | yes | - | Destination path |
-| `create_dirs` | bool | no | `false` | Create parent directories |
+| Param         | Type   | Required | Default | Description               |
+| ------------- | ------ | -------- | ------- | ------------------------- |
+| `src`         | string | yes      | -       | Source path               |
+| `dst`         | string | yes      | -       | Destination path          |
+| `create_dirs` | bool   | no       | `false` | Create parent directories |
 
 **Output**: `{ "src": "...", "dst": "...", "size": 1024, "is_dir": false }`
 
@@ -120,15 +120,15 @@ All FS actions respect isolator path validation (deny_paths, read_only_paths, wr
 
 Execute a system command with process isolation.
 
-| Param | Type | Required | Default | Description |
-|-------|------|----------|---------|-------------|
-| `command` | string | yes | - | Command to execute |
-| `args` | string[] | no | - | Command arguments |
-| `env` | map[string]string | no | - | Environment variables (added to inherited env) |
-| `cwd` | string | no | - | Working directory |
-| `stdin` | string | no | - | Standard input |
-| `timeout` | string | no | `30s` | Execution timeout |
-| `shell` | bool | no | `false` | Run via `/bin/sh -c` |
+| Param     | Type              | Required | Default | Description                                    |
+| --------- | ----------------- | -------- | ------- | ---------------------------------------------- |
+| `command` | string            | yes      | -       | Command to execute                             |
+| `args`    | string[]          | no       | -       | Command arguments                              |
+| `env`     | map[string]string | no       | -       | Environment variables (added to inherited env) |
+| `cwd`     | string            | no       | -       | Working directory                              |
+| `stdin`   | string            | no       | -       | Standard input                                 |
+| `timeout` | string            | no       | `30s`   | Execution timeout                              |
+| `shell`   | bool              | no       | `false` | Run via `/bin/sh -c`                           |
 
 **Output**: `{ "stdout": ..., "stdout_raw": "...", "stderr": "...", "exit_code": 0, "duration_ms": 150, "killed": false }`
 
@@ -140,20 +140,20 @@ Execute a system command with process isolation.
 
 ### crypto.hash
 
-| Param | Type | Required | Default | Description |
-|-------|------|----------|---------|-------------|
-| `data` | string | yes | - | Data to hash |
-| `algorithm` | string | no | `sha256` | `sha256`, `sha512`, `sha384`, `md5`, `sha1` |
+| Param       | Type   | Required | Default  | Description                                 |
+| ----------- | ------ | -------- | -------- | ------------------------------------------- |
+| `data`      | string | yes      | -        | Data to hash                                |
+| `algorithm` | string | no       | `sha256` | `sha256`, `sha512`, `sha384`, `md5`, `sha1` |
 
 **Output**: `{ "hash": "a1b2c3...", "algorithm": "sha256" }`
 
 ### crypto.hmac
 
-| Param | Type | Required | Default | Description |
-|-------|------|----------|---------|-------------|
-| `data` | string | yes | - | Data to sign |
-| `key` | string | yes | - | HMAC secret key |
-| `algorithm` | string | no | `sha256` | Hash algorithm |
+| Param       | Type   | Required | Default  | Description     |
+| ----------- | ------ | -------- | -------- | --------------- |
+| `data`      | string | yes      | -        | Data to sign    |
+| `key`       | string | yes      | -        | HMAC secret key |
+| `algorithm` | string | no       | `sha256` | Hash algorithm  |
 
 **Output**: `{ "hmac": "d4e5f6...", "algorithm": "sha256" }`
 
@@ -169,88 +169,99 @@ All assert actions return `{ "pass": true }` on success or fail with `ASSERTION_
 
 ### assert.equals
 
-| Param | Type | Required | Description |
-|-------|------|----------|-------------|
-| `expected` | any | yes | Expected value |
-| `actual` | any | yes | Actual value |
-| `message` | string | no | Custom failure message |
+| Param      | Type   | Required | Description            |
+| ---------- | ------ | -------- | ---------------------- |
+| `expected` | any    | yes      | Expected value         |
+| `actual`   | any    | yes      | Actual value           |
+| `message`  | string | no       | Custom failure message |
 
 Deep equality comparison with JSON number normalization.
 
 ### assert.contains
 
-| Param | Type | Required | Description |
-|-------|------|----------|-------------|
-| `haystack` | string or array | yes | Value to search in |
-| `needle` | any | yes | Value to find |
-| `message` | string | no | Custom failure message |
+| Param      | Type            | Required | Description            |
+| ---------- | --------------- | -------- | ---------------------- |
+| `haystack` | string or array | yes      | Value to search in     |
+| `needle`   | any             | yes      | Value to find          |
+| `message`  | string          | no       | Custom failure message |
 
 String: substring check. Array: element membership.
 
 ### assert.matches
 
-| Param | Type | Required | Description |
-|-------|------|----------|-------------|
-| `value` | string | yes | String to test |
-| `pattern` | string | yes | Regular expression |
-| `message` | string | no | Custom failure message |
+| Param     | Type   | Required | Description            |
+| --------- | ------ | -------- | ---------------------- |
+| `value`   | string | yes      | String to test         |
+| `pattern` | string | yes      | Regular expression     |
+| `message` | string | no       | Custom failure message |
 
 **Output on success**: `{ "pass": true, "matches": "matched-text" }`
 
 ### assert.schema
 
-| Param | Type | Required | Description |
-|-------|------|----------|-------------|
-| `data` | object | yes | Data to validate |
-| `schema` | object | yes | JSON Schema (Draft 2020-12) |
-| `message` | string | no | Custom failure message |
+| Param     | Type   | Required | Description                 |
+| --------- | ------ | -------- | --------------------------- |
+| `data`    | object | yes      | Data to validate            |
+| `schema`  | object | yes      | JSON Schema (Draft 2020-12) |
+| `message` | string | no       | Custom failure message      |
 
 ## Workflow Actions
 
 ### workflow.run
 
-| Param | Type | Required | Description |
-|-------|------|----------|-------------|
-| `template_name` | string | yes | Child workflow template name |
-| `version` | string | no | Template version |
-| `params` | object | no | Input parameters for child |
+| Param           | Type   | Required | Description                  |
+| --------------- | ------ | -------- | ---------------------------- |
+| `template_name` | string | yes      | Child workflow template name |
+| `version`       | string | no       | Template version             |
+| `params`        | object | no       | Input parameters for child   |
 
 **Output**: Child workflow's output.
 
 ### workflow.emit
 
-| Param | Type | Required | Description |
-|-------|------|----------|-------------|
-| `event_type` | string | yes | Custom event type name |
-| `payload` | any | no | Event payload |
+| Param        | Type   | Required | Description            |
+| ------------ | ------ | -------- | ---------------------- |
+| `event_type` | string | yes      | Custom event type name |
+| `payload`    | any    | no       | Event payload          |
 
 **Output**: `{ "emitted": true }`
 
 ### workflow.context
 
-| Param | Type | Required | Description |
-|-------|------|----------|-------------|
-| `action` | string | yes | `read` or `update` |
-| `workflow_id` | string | yes | Target workflow |
-| `data` | any | no | Data to store (for update) |
-| `agent_notes` | string | no | Agent notes (for update) |
+| Param         | Type   | Required | Description                |
+| ------------- | ------ | -------- | -------------------------- |
+| `action`      | string | yes      | `read` or `update`         |
+| `workflow_id` | string | yes      | Target workflow            |
+| `data`        | any    | no       | Data to store (for update) |
+| `agent_notes` | string | no       | Agent notes (for update)   |
 
 **Output (read)**: Workflow context object. **Output (update)**: `{ "updated": true }`
 
 ### workflow.fail
 
-| Param | Type | Required | Description |
-|-------|------|----------|-------------|
-| `reason` | string | yes | Failure reason |
+| Param    | Type   | Required | Description    |
+| -------- | ------ | -------- | -------------- |
+| `reason` | string | yes      | Failure reason |
 
 Always fails with `NON_RETRYABLE` error. Used to force-fail a workflow from within a step.
 
 ### workflow.log
 
-| Param | Type | Required | Default | Description |
-|-------|------|----------|---------|-------------|
-| `message` | string | yes | - | Log message |
-| `level` | string | no | `info` | `debug`, `info`, `warn`, `error` |
-| `data` | any | no | - | Structured data to log |
+| Param     | Type   | Required | Default | Description                      |
+| --------- | ------ | -------- | ------- | -------------------------------- |
+| `message` | string | yes      | -       | Log message                      |
+| `level`   | string | no       | `info`  | `debug`, `info`, `warn`, `error` |
+| `data`    | any    | no       | -       | Structured data to log           |
 
 **Output**: `{ "logged": true }`
+
+### workflow.notify
+
+| Param     | Type   | Required | Default | Description                                |
+| --------- | ------ | -------- | ------- | ------------------------------------------ |
+| `message` | string | yes      | -       | Notification message                       |
+| `data`    | any    | no       | -       | Additional data payload                    |
+
+Pushes a real-time notification to the workflow's agent via MCP SSE. Best-effort: if the agent is not connected, the step completes without error.
+
+**Output**: `{ "notified": true }` or `{ "notified": false, "reason": "..." }`

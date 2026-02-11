@@ -7,19 +7,20 @@
 `${{namespace.path.to.field}}`
 
 Interpolation is resolved in two passes:
+
 1. **Pass 1**: All non-secret variables (steps, inputs, workflow, context, loop)
 2. **Pass 2**: Secrets via encrypted vault (`${{secrets.KEY}}`)
 
 ### Namespaces
 
-| Namespace | Syntax | Description |
-|-----------|--------|-------------|
-| `steps` | `${{steps.<id>.output.<field>}}` | Output from completed steps |
-| `inputs` | `${{inputs.<name>}}` | Workflow input parameters |
-| `workflow` | `${{workflow.<field>}}` | Workflow metadata (run_id, etc.) |
-| `context` | `${{context.<field>}}` | Workflow context (intent, accumulated_data) |
-| `secrets` | `${{secrets.<KEY>}}` | Encrypted vault secrets (AES-256-GCM, PBKDF2) |
-| `loop` | `${{loop.item}}`, `${{loop.index}}` | Loop iteration variables |
+| Namespace  | Syntax                              | Description                                   |
+| ---------- | ----------------------------------- | --------------------------------------------- |
+| `steps`    | `${{steps.<id>.output.<field>}}`    | Output from completed steps                   |
+| `inputs`   | `${{inputs.<name>}}`                | Workflow input parameters                     |
+| `workflow` | `${{workflow.<field>}}`             | Workflow metadata (run_id, etc.)              |
+| `context`  | `${{context.<field>}}`              | Workflow context (intent, accumulated_data)   |
+| `secrets`  | `${{secrets.<KEY>}}`                | Encrypted vault secrets (AES-256-GCM, PBKDF2) |
+| `loop`     | `${{loop.item}}`, `${{loop.index}}` | Loop iteration variables                      |
 
 ### Deep Path Access
 
@@ -42,19 +43,19 @@ Used for: condition step `expression`, step-level `condition` guards, loop `cond
 
 **Available variables**:
 
-| Variable | Type | Description |
-|----------|------|-------------|
-| `steps` | map[string]dyn | Step outputs keyed by step ID |
-| `inputs` | map[string]dyn | Workflow input params |
-| `workflow` | map[string]dyn | Workflow metadata |
-| `context` | map[string]dyn | Workflow context |
-| `iter` | map[string]dyn | Loop vars (item, index) |
+| Variable   | Type           | Description                   |
+| ---------- | -------------- | ----------------------------- |
+| `steps`    | map[string]dyn | Step outputs keyed by step ID |
+| `inputs`   | map[string]dyn | Workflow input params         |
+| `workflow` | map[string]dyn | Workflow metadata             |
+| `context`  | map[string]dyn | Workflow context              |
+| `iter`     | map[string]dyn | Loop vars (item, index)       |
 
 **IMPORTANT**: `loop` is a reserved keyword in CEL-Go. Use `iter.item` and `iter.index` in CEL expressions. The `${{loop.item}}` interpolation syntax still uses "loop".
 
 **Examples**:
 
-```
+```plaintext
 inputs.count > 10
 steps.fetch.output.status_code == 200
 steps.check.output.valid == true && inputs.mode == "strict"
@@ -92,6 +93,7 @@ The entire interpolation scope is passed as input JSON object.
 Used for: complex deterministic logic when CEL syntax is insufficient.
 
 **Features**:
+
 - Let bindings: `let x = expr; body`
 - Array operations: `filter`, `map`, `count`, `any`, `all`, `sum`, `min`, `max`
 - String operations: `contains`, `startsWith`, `endsWith`, `trim`, `upper`, `lower`
@@ -102,7 +104,7 @@ Used for: complex deterministic logic when CEL syntax is insufficient.
 
 **Examples**:
 
-```
+```plaintext
 len(items) > 0 && items[0].valid
 count(items, {.status == "active"}) >= 3
 sum(items, {.amount}) > 1000

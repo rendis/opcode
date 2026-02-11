@@ -16,13 +16,19 @@ Steps chained via `depends_on`:
       "id": "hash",
       "action": "crypto.hash",
       "depends_on": ["fetch"],
-      "params": { "data": "${{steps.fetch.output.body}}", "algorithm": "sha256" }
+      "params": {
+        "data": "${{steps.fetch.output.body}}",
+        "algorithm": "sha256"
+      }
     },
     {
       "id": "save",
       "action": "fs.write",
       "depends_on": ["hash"],
-      "params": { "path": "/tmp/result.txt", "content": "${{steps.hash.output.hash}}" }
+      "params": {
+        "path": "/tmp/result.txt",
+        "content": "${{steps.hash.output.hash}}"
+      }
     }
   ]
 }
@@ -42,14 +48,26 @@ Route based on CEL expression:
         "expression": "inputs.env",
         "branches": {
           "prod": [
-            { "id": "deploy", "action": "shell.exec", "params": { "command": "deploy.sh", "args": ["prod"] } }
+            {
+              "id": "deploy",
+              "action": "shell.exec",
+              "params": { "command": "deploy.sh", "args": ["prod"] }
+            }
           ],
           "staging": [
-            { "id": "test", "action": "shell.exec", "params": { "command": "test.sh" } }
+            {
+              "id": "test",
+              "action": "shell.exec",
+              "params": { "command": "test.sh" }
+            }
           ]
         },
         "default": [
-          { "id": "dry-run", "action": "shell.exec", "params": { "command": "echo", "args": ["dry run"] } }
+          {
+            "id": "dry-run",
+            "action": "shell.exec",
+            "params": { "command": "echo", "args": ["dry run"] }
+          }
         ]
       }
     }
@@ -97,9 +115,27 @@ Execute branches concurrently:
       "config": {
         "mode": "all",
         "branches": [
-          [{ "id": "check-api", "action": "http.get", "params": { "url": "${{inputs.api_url}}/health" } }],
-          [{ "id": "check-db", "action": "shell.exec", "params": { "command": "pg_isready" } }],
-          [{ "id": "check-cache", "action": "http.get", "params": { "url": "${{inputs.cache_url}}/ping" } }]
+          [
+            {
+              "id": "check-api",
+              "action": "http.get",
+              "params": { "url": "${{inputs.api_url}}/health" }
+            }
+          ],
+          [
+            {
+              "id": "check-db",
+              "action": "shell.exec",
+              "params": { "command": "pg_isready" }
+            }
+          ],
+          [
+            {
+              "id": "check-cache",
+              "action": "http.get",
+              "params": { "url": "${{inputs.cache_url}}/ping" }
+            }
+          ]
         ]
       }
     }
@@ -190,7 +226,10 @@ Parent workflow calls a child template:
       "params": {
         "template_name": "data-pipeline",
         "version": "v1",
-        "params": { "source": "${{inputs.data_source}}", "run_id": "${{steps.prepare.output.uuid}}" }
+        "params": {
+          "source": "${{inputs.data_source}}",
+          "run_id": "${{steps.prepare.output.uuid}}"
+        }
       }
     }
   ]
@@ -219,14 +258,16 @@ Parallel branches containing loops:
                 "over": "[\"x\",\"y\",\"z\"]",
                 "max_iter": 10,
                 "body": [
-                  { "id": "hash", "action": "crypto.hash", "params": { "data": "${{loop.item}}" } }
+                  {
+                    "id": "hash",
+                    "action": "crypto.hash",
+                    "params": { "data": "${{loop.item}}" }
+                  }
                 ]
               }
             }
           ],
-          [
-            { "id": "generate-id", "action": "crypto.uuid", "params": {} }
-          ]
+          [{ "id": "generate-id", "action": "crypto.uuid", "params": {} }]
         ]
       }
     }
@@ -238,7 +279,7 @@ Parallel branches containing loops:
 
 Full define -> run -> status -> signal -> status flow:
 
-**Step 1: Define template**
+### Step 1: Define template
 
 ```json
 // opcode.define
@@ -247,7 +288,11 @@ Full define -> run -> status -> signal -> status flow:
   "agent_id": "my-agent",
   "definition": {
     "steps": [
-      { "id": "check", "action": "http.get", "params": { "url": "${{inputs.url}}" } },
+      {
+        "id": "check",
+        "action": "http.get",
+        "params": { "url": "${{inputs.url}}" }
+      },
       {
         "id": "decide",
         "type": "reasoning",
@@ -268,7 +313,7 @@ Full define -> run -> status -> signal -> status flow:
 // Returns: { "name": "approval-flow", "version": "v1" }
 ```
 
-**Step 2: Run workflow**
+### Step 2: Run workflow
 
 ```json
 // opcode.run
@@ -280,7 +325,7 @@ Full define -> run -> status -> signal -> status flow:
 // Returns: { "status": "suspended", "workflow_id": "abc-123", ... }
 ```
 
-**Step 3: Check status**
+### Step 3: Check status
 
 ```json
 // opcode.status
@@ -288,7 +333,7 @@ Full define -> run -> status -> signal -> status flow:
 // Returns: { "status": "suspended", "steps": { "decide": { "status": "suspended" } } }
 ```
 
-**Step 4: Resolve decision**
+### Step 4: Resolve decision
 
 ```json
 // opcode.signal
@@ -303,7 +348,7 @@ Full define -> run -> status -> signal -> status flow:
 // Returns: { "ok": true }
 ```
 
-**Step 5: Verify completion**
+### Step 5: Verify completion
 
 ```json
 // opcode.status
@@ -363,11 +408,11 @@ json.dump(result, sys.stdout)
 
 ```javascript
 #!/usr/bin/env node
-let input = '';
-process.stdin.on('data', c => input += c);
-process.stdin.on('end', () => {
+let input = "";
+process.stdin.on("data", (c) => (input += c));
+process.stdin.on("end", () => {
   const data = JSON.parse(input);
-  const result = { ids: data.items.map(i => i.id) };
+  const result = { ids: data.items.map((i) => i.id) };
   process.stdout.write(JSON.stringify(result));
 });
 ```
