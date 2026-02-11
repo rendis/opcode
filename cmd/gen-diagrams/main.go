@@ -14,30 +14,43 @@ import (
 )
 
 func main() {
+	// Branching workflow: fetch → validate → condition(in_stock?) → two branches → merge → ship
 	def := &schema.WorkflowDefinition{
 		Steps: []schema.StepDefinition{
 			{ID: "fetch-data", Type: schema.StepTypeAction, Action: "http.request"},
 			{ID: "validate", Type: schema.StepTypeAction, Action: "jq", DependsOn: []string{"fetch-data"}},
-			{ID: "decide", Type: schema.StepTypeReasoning, DependsOn: []string{"validate"},
-				Config: mustJSON(schema.ReasoningConfig{
-					PromptContext: "Choose processing strategy",
-					Options: []schema.ReasoningOption{
-						{ID: "fast", Description: "Quick processing"},
-						{ID: "thorough", Description: "Deep analysis"},
+			{ID: "check-stock", Type: schema.StepTypeCondition, DependsOn: []string{"validate"},
+				Config: mustJSON(schema.ConditionConfig{
+					Expression: "${{ steps.validate.output.quantity > 0 }}",
+					Branches: map[string][]schema.StepDefinition{
+						"in_stock": {
+							{ID: "process-payment", Type: schema.StepTypeAction, Action: "http.request"},
+						},
+						"out_of_stock": {
+							{ID: "notify-restock", Type: schema.StepTypeAction, Action: "http.request"},
+						},
 					},
 				})},
-			{ID: "process", Type: schema.StepTypeAction, Action: "shell.exec", DependsOn: []string{"decide"}},
-			{ID: "notify", Type: schema.StepTypeAction, Action: "http.request", DependsOn: []string{"process"}},
+			{ID: "approval", Type: schema.StepTypeReasoning, DependsOn: []string{"check-stock"},
+				Config: mustJSON(schema.ReasoningConfig{
+					PromptContext: "Approve order for shipping?",
+					Options: []schema.ReasoningOption{
+						{ID: "approve", Description: "Ship the order"},
+						{ID: "reject", Description: "Cancel order"},
+					},
+				})},
+			{ID: "ship", Type: schema.StepTypeAction, Action: "shell.exec", DependsOn: []string{"approval"}},
 		},
 	}
 
-	// With status overlay
 	states := []*store.StepState{
 		{StepID: "fetch-data", Status: schema.StepStatusCompleted, DurationMs: 450},
 		{StepID: "validate", Status: schema.StepStatusCompleted, DurationMs: 12},
-		{StepID: "decide", Status: schema.StepStatusSuspended},
-		{StepID: "process", Status: schema.StepStatusPending},
-		{StepID: "notify", Status: schema.StepStatusPending},
+		{StepID: "check-stock", Status: schema.StepStatusCompleted, DurationMs: 3},
+		{StepID: "check-stock.in_stock.process-payment", Status: schema.StepStatusCompleted, DurationMs: 890},
+		{StepID: "check-stock.out_of_stock.notify-restock", Status: schema.StepStatusSkipped},
+		{StepID: "approval", Status: schema.StepStatusSuspended},
+		{StepID: "ship", Status: schema.StepStatusPending},
 	}
 
 	model, err := diagram.Build(def, states)
@@ -49,10 +62,12 @@ func main() {
 	outDir := filepath.Join("docs", "assets")
 	os.MkdirAll(outDir, 0o755)
 
-	// ASCII
-	ascii := diagram.RenderASCII(model)
+	// ASCII (mermaid-ascii with hand-rolled fallback)
+	home, _ := os.UserHomeDir()
+	binDir := filepath.Join(home, ".opcode", "bin")
+	ascii := diagram.RenderASCIIAuto(model, binDir)
 	os.WriteFile(filepath.Join(outDir, "diagram-ascii.txt"), []byte(ascii), 0o644)
-	fmt.Println("=== ASCII ===")
+	fmt.Println("=== ASCII (mermaid-ascii) ===")
 	fmt.Println(ascii)
 
 	// Mermaid
@@ -66,8 +81,9 @@ func main() {
 	if imgErr != nil {
 		fmt.Fprintf(os.Stderr, "image error: %v\n", imgErr)
 	} else {
-		os.WriteFile(filepath.Join(outDir, "diagram-sample.png"), png, 0o644)
-		fmt.Printf("=== Image ===\nPNG written: %d bytes\n", len(png))
+		pngPath := filepath.Join(outDir, "diagram-sample.png")
+		os.WriteFile(pngPath, png, 0o644)
+		fmt.Printf("=== Image (PNG) ===\nWritten: %s (%d bytes)\n", pngPath, len(png))
 	}
 }
 

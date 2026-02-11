@@ -24,6 +24,7 @@ type OpcodeServerDeps struct {
 	Hub      streaming.EventHub
 	Sessions *SessionRegistry
 	Logger   *slog.Logger
+	BinDir   string // Path to external tool binaries (e.g. ~/.opcode/bin)
 }
 
 // OpcodeServer wraps an MCP server with opcode-specific tool handlers.
@@ -35,6 +36,7 @@ type OpcodeServer struct {
 	hub       streaming.EventHub
 	sessions  *SessionRegistry
 	logger    *slog.Logger
+	binDir    string
 	mcpServer *server.MCPServer
 }
 
@@ -58,6 +60,7 @@ func NewOpcodeServer(deps OpcodeServerDeps) *OpcodeServer {
 		hub:      deps.Hub,
 		sessions: sessions,
 		logger:   logger,
+		binDir:   deps.BinDir,
 	}
 
 	mcpSrv := server.NewMCPServer(

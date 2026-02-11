@@ -480,7 +480,7 @@ func (s *OpcodeServer) handleDiagram(ctx context.Context, req mcp.CallToolReques
 
 	switch format {
 	case "ascii":
-		text := diagram.RenderASCII(model)
+		text := diagram.RenderASCIIAuto(model, s.binDir)
 		return mcp.NewToolResultText(text), nil
 	case "mermaid":
 		text := diagram.RenderMermaid(model)

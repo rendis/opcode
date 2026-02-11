@@ -35,14 +35,14 @@ Workflow orchestration engine for AI agents. Runs as a persistent SSE daemon —
 
 ## Which Tool?
 
-| I want to...                         | Tool            |
-| ------------------------------------ | --------------- |
-| Create/update a workflow template    | opcode.define   |
-| Execute a workflow                   | opcode.run      |
-| Check status or pending decisions    | opcode.status   |
-| Resolve a decision / cancel / retry  | opcode.signal   |
-| List workflows, events, or templates | opcode.query    |
-| Visualize a workflow DAG             | opcode.diagram  |
+| I want to...                         | Tool           |
+| ------------------------------------ | -------------- |
+| Create/update a workflow template    | opcode.define  |
+| Execute a workflow                   | opcode.run     |
+| Check status or pending decisions    | opcode.status  |
+| Resolve a decision / cancel / retry  | opcode.signal  |
+| List workflows, events, or templates | opcode.query   |
+| Visualize a workflow DAG             | opcode.diagram |
 
 ## Prerequisites
 
@@ -74,7 +74,7 @@ opcode install --listen-addr :4100 --vault-key "my-passphrase"
 
 `--vault-key` is memory-only (not persisted). For production, set `OPCODE_VAULT_KEY` env var.
 
-Generates `~/.opcode/settings.json`. All fields overridable via env vars (`OPCODE_LISTEN_ADDR`, `OPCODE_DB_PATH`, etc.).
+Writes `~/.opcode/settings.json`, downloads [`mermaid-ascii`](https://github.com/AlexanderGrooff/mermaid-ascii) to `~/.opcode/bin/` for enhanced ASCII diagrams, and starts the daemon. All settings overridable via env vars (`OPCODE_LISTEN_ADDR`, `OPCODE_DB_PATH`, etc.).
 
 | Setting       | Default                 | Env override         | Description                                 |
 | ------------- | ----------------------- | -------------------- | ------------------------------------------- |
@@ -117,12 +117,13 @@ Each agent self-identifies via the `agent_id` parameter in tool calls. Opcode au
 
 1. Loads config from `~/.opcode/settings.json` (env vars override)
 2. Creates data directory, opens/creates libSQL database, runs migrations
-3. Suspends orphaned `active` workflows (emits `workflow_interrupted`)
-4. Initializes secret vault (if `OPCODE_VAULT_KEY` set)
-5. Registers 24 built-in actions
-6. Starts cron scheduler (recovers missed jobs)
-7. Begins listening for MCP JSON-RPC over SSE + web panel on same port
-8. Shuts down gracefully on SIGTERM/SIGINT (10s timeout)
+3. Downloads `mermaid-ascii` to `~/.opcode/bin/` (non-fatal — falls back to built-in renderer)
+4. Suspends orphaned `active` workflows (emits `workflow_interrupted`)
+5. Initializes secret vault (if `OPCODE_VAULT_KEY` set)
+6. Registers 24 built-in actions
+7. Starts cron scheduler (recovers missed jobs)
+8. Begins listening for MCP JSON-RPC over SSE + web panel on same port
+9. Shuts down gracefully on SIGTERM/SIGINT (10s timeout)
 
 ### Recovery
 
@@ -285,17 +286,18 @@ Note: event queries require either `event_type` or `workflow_id` in filter.
 
 Generate a visual DAG diagram from a template or running workflow.
 
-| Param            | Type   | Required | Description                                               |
-| ---------------- | ------ | -------- | --------------------------------------------------------- |
-| `template_name`  | string | no*      | Template to visualize (structure preview)                 |
-| `version`        | string | no       | Template version (default: latest)                        |
-| `workflow_id`    | string | no*      | Workflow to visualize (with runtime status)               |
-| `format`         | enum   | yes      | `ascii` / `mermaid` / `image`                             |
+| Param            | Type   | Required | Description                                                |
+| ---------------- | ------ | -------- | ---------------------------------------------------------- |
+| `template_name`  | string | no\*     | Template to visualize (structure preview)                  |
+| `version`        | string | no       | Template version (default: latest)                         |
+| `workflow_id`    | string | no\*     | Workflow to visualize (with runtime status)                |
+| `format`         | enum   | yes      | `ascii` / `mermaid` / `image`                              |
 | `include_status` | bool   | no       | Show runtime status overlay (default: true if workflow_id) |
 
 \* One of `template_name` or `workflow_id` required.
 
 **Use cases**:
+
 - `template_name` — preview DAG structure before execution
 - `workflow_id` — visualize with live step status (completed, running, suspended, pending)
 - `format: "ascii"` — CLI-friendly text output with box-drawing characters
@@ -308,17 +310,17 @@ Generate a visual DAG diagram from a template or running workflow.
 
 The daemon serves a web management panel at the same port as MCP SSE (default `http://localhost:4100`). No additional configuration needed.
 
-| Page              | Features                                                    |
-| ----------------- | ----------------------------------------------------------- |
-| Dashboard         | System counters, per-agent table, pending decisions, feed   |
-| Workflows         | Filter by status/agent, pagination, cancel, re-run          |
-| Workflow Detail   | Live DAG diagram, step states, events timeline              |
-| Templates         | List, create via JSON paste (auto-versions), definition     |
-| Template Detail   | Version selector, Mermaid diagram preview                   |
-| Decisions         | Pending queue, resolve/reject forms with context            |
-| Scheduler         | Cron job CRUD, enable/disable, run history                  |
-| Events            | Event log filtered by workflow and/or type                  |
-| Agents            | Registered agents with type and last-seen                   |
+| Page            | Features                                                  |
+| --------------- | --------------------------------------------------------- |
+| Dashboard       | System counters, per-agent table, pending decisions, feed |
+| Workflows       | Filter by status/agent, pagination, cancel, re-run        |
+| Workflow Detail | Live DAG diagram, step states, events timeline            |
+| Templates       | List, create via JSON paste (auto-versions), definition   |
+| Template Detail | Version selector, Mermaid diagram preview                 |
+| Decisions       | Pending queue, resolve/reject forms with context          |
+| Scheduler       | Cron job CRUD, enable/disable, run history                |
+| Events          | Event log filtered by workflow and/or type                |
+| Agents          | Registered agents with type and last-seen                 |
 
 Live updates via SSE — dashboard and workflow detail pages auto-refresh on new events.
 
@@ -484,13 +486,13 @@ See [expressions.md](references/expressions.md) for CEL, GoJQ, Expr engine detai
 
 ## Built-in Actions
 
-| Category       | Actions                                                                                     |
-| -------------- | ------------------------------------------------------------------------------------------- |
-| **HTTP**       | `http.request`, `http.get`, `http.post`                                                     |
-| **Filesystem** | `fs.read`, `fs.write`, `fs.append`, `fs.delete`, `fs.list`, `fs.stat`, `fs.copy`, `fs.move` |
-| **Shell**      | `shell.exec`                                                                                |
-| **Crypto**     | `crypto.hash`, `crypto.hmac`, `crypto.uuid`                                                 |
-| **Assert**     | `assert.equals`, `assert.contains`, `assert.matches`, `assert.schema`                       |
+| Category       | Actions                                                                                                 |
+| -------------- | ------------------------------------------------------------------------------------------------------- |
+| **HTTP**       | `http.request`, `http.get`, `http.post`                                                                 |
+| **Filesystem** | `fs.read`, `fs.write`, `fs.append`, `fs.delete`, `fs.list`, `fs.stat`, `fs.copy`, `fs.move`             |
+| **Shell**      | `shell.exec`                                                                                            |
+| **Crypto**     | `crypto.hash`, `crypto.hmac`, `crypto.uuid`                                                             |
+| **Assert**     | `assert.equals`, `assert.contains`, `assert.matches`, `assert.schema`                                   |
 | **Workflow**   | `workflow.run`, `workflow.emit`, `workflow.context`, `workflow.fail`, `workflow.log`, `workflow.notify` |
 
 **Quick reference** (most-used actions):

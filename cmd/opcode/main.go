@@ -131,6 +131,7 @@ func runServe() {
 	sessions := opcmcp.NewSessionRegistry()
 
 	// --- MCP Server (before workflow actions — notifier needs MCPServer) ---
+	binDir := filepath.Join(opcodeDir(), "bin")
 	mcpServer := opcmcp.NewOpcodeServer(opcmcp.OpcodeServerDeps{
 		Executor: executor,
 		Store:    libsqlStore,
@@ -139,6 +140,7 @@ func runServe() {
 		Hub:      hub,
 		Sessions: sessions,
 		Logger:   logger,
+		BinDir:   binDir,
 	})
 
 	// --- Notifier ---

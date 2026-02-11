@@ -134,7 +134,7 @@ This produces the `opcode` binary in the project root. The binary is a self-cont
 opcode install --listen-addr :4100 --vault-key "my-secret-passphrase"
 ```
 
-This writes `~/.opcode/settings.json` and immediately starts the daemon. `--vault-key` is memory-only (not persisted to disk). The web panel is available at `http://localhost:4100`.
+This writes `~/.opcode/settings.json`, downloads [`mermaid-ascii`](https://github.com/AlexanderGrooff/mermaid-ascii) for enhanced ASCII diagrams, and starts the daemon. `--vault-key` is memory-only (not persisted to disk). The web panel is available at `http://localhost:4100`.
 
 If the process stops, restart it with:
 
@@ -552,7 +552,7 @@ OPCODE generates workflow DAG visualizations in three formats. The `opcode.diagr
 
 ### ASCII
 
-Text-based box-drawing diagram for CLI agents and terminal output:
+Text-based box-drawing diagram for CLI agents and terminal output. When [`mermaid-ascii`](https://github.com/AlexanderGrooff/mermaid-ascii) is installed (auto-downloaded by `opcode install`), diagrams use its layout engine for superior branching, edge routing, and diamond merges. Falls back to a built-in renderer otherwise.
 
 ```
 === Workflow ===
