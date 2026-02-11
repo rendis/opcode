@@ -16,6 +16,7 @@ release: clean
 	tar -czf dist/opcode_Linux_arm64.tar.gz -C dist/opcode_linux_arm64 opcode
 	GOOS=linux GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o dist/opcode_linux_amd64/opcode ./cmd/opcode/
 	tar -czf dist/opcode_Linux_x86_64.tar.gz -C dist/opcode_linux_amd64 opcode
+	@cd dist && shasum -a 256 *.tar.gz > checksums.txt
 	@echo "Release artifacts in dist/"
 
 clean:

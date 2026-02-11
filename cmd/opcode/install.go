@@ -14,9 +14,18 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 )
 
 const mermaidASCIIVersion = "1.1.0"
+
+// SHA-256 checksums for mermaid-ascii v1.1.0 release assets.
+var mermaidASCIIChecksums = map[string]string{
+	"mermaid-ascii_Darwin_arm64.tar.gz":  "068d2ff869d4921655cab471500fffd8c3ed28155b100518ed3cf3835d53d3d0",
+	"mermaid-ascii_Darwin_x86_64.tar.gz": "0cd4c9c01a03284fe866f39a1ce1aaee1e6a2fbd91deedc4ec254cb87622eec8",
+	"mermaid-ascii_Linux_arm64.tar.gz":   "3b7d0a95141bfbca838e445ea802ffb7fba8873b3c4af498482c84f83526f2db",
+	"mermaid-ascii_Linux_x86_64.tar.gz":  "838ea93d561b3bc83aa15531c6ed7d2d261a8edc521d5484f7e91fe831cc4c65",
+}
 
 func runInstall(args []string) {
 	fs := flag.NewFlagSet("install", flag.ExitOnError)
@@ -129,26 +138,45 @@ func installMermaidASCII(binDir string) {
 		return
 	}
 
-	resp, err := http.Get(url) //nolint:gosec // trusted URL, pinned version
+	// Download to temp file for checksum verification.
+	client := &http.Client{Timeout: 60 * time.Second}
+	tmpPath, err := downloadToTempFile(url, binDir, client)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: download failed: %v — ASCII diagrams will use fallback renderer\n", err)
 		return
 	}
-	defer resp.Body.Close()
+	defer os.Remove(tmpPath)
 
-	if resp.StatusCode != http.StatusOK {
-		fmt.Fprintf(os.Stderr, "Warning: download returned %d — ASCII diagrams will use fallback renderer\n", resp.StatusCode)
-		return
+	// Verify checksum.
+	if expected, ok := mermaidASCIIChecksums[assetName]; ok {
+		actual, err := sha256File(tmpPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: cannot compute checksum: %v — ASCII diagrams will use fallback renderer\n", err)
+			return
+		}
+		if actual != expected {
+			fmt.Fprintf(os.Stderr, "Warning: checksum mismatch for %s (expected %s, got %s) — ASCII diagrams will use fallback renderer\n",
+				assetName, expected, actual)
+			return
+		}
+	} else {
+		fmt.Fprintf(os.Stderr, "Warning: no known checksum for %s — skipping verification\n", assetName)
 	}
 
-	if strings.HasSuffix(assetName, ".tar.gz") {
-		err = extractTarGz(resp.Body, binDir, "mermaid-ascii")
-	} else {
+	// Extract from verified archive.
+	f, err := os.Open(tmpPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: cannot open archive: %v\n", err)
+		return
+	}
+	defer f.Close()
+
+	if !strings.HasSuffix(assetName, ".tar.gz") {
 		fmt.Fprintf(os.Stderr, "Warning: unsupported archive format: %s\n", assetName)
 		return
 	}
 
-	if err != nil {
+	if err := extractTarGz(f, binDir, "mermaid-ascii"); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: extraction failed: %v — ASCII diagrams will use fallback renderer\n", err)
 		_ = os.Remove(destPath)
 		return

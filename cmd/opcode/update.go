@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,7 +16,13 @@ import (
 	"time"
 )
 
-func runUpdate(_ []string) {
+func runUpdate(args []string) {
+	fs := flag.NewFlagSet("update", flag.ExitOnError)
+	skipVerify := fs.Bool("skip-verify", false, "skip SHA-256 checksum verification")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(1)
+	}
+
 	fmt.Printf("Current version: %s\n", version)
 
 	// 1. Check GitHub releases.
@@ -48,7 +55,13 @@ func runUpdate(_ []string) {
 		return
 	}
 
-	// 4. Resolve current binary path.
+	// 4. Load expected checksum (if available).
+	var expectedHash string
+	if !*skipVerify {
+		expectedHash = loadExpectedChecksum(release, asset.Name)
+	}
+
+	// 5. Resolve current binary path.
 	selfPath, err := os.Executable()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: cannot determine executable path: %v\n", err)
@@ -60,16 +73,16 @@ func runUpdate(_ []string) {
 		os.Exit(1)
 	}
 
-	// 5. Download and extract.
+	// 6. Download, verify, and extract.
 	fmt.Printf("Downloading %s...\n", asset.Name)
-	binPath, tmpDir, err := downloadAndExtractRelease(asset.BrowserDownloadURL)
+	binPath, tmpDir, err := downloadVerifyAndExtract(asset.BrowserDownloadURL, expectedHash)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: download failed: %v\n", err)
 		os.Exit(1)
 	}
 	defer os.RemoveAll(tmpDir)
 
-	// 6. Replace current binary.
+	// 7. Replace current binary.
 	if err := replaceBinary(selfPath, binPath); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: cannot replace binary: %v\n", err)
 		os.Exit(1)
@@ -77,7 +90,7 @@ func runUpdate(_ []string) {
 
 	fmt.Printf("Updated to %s\n", release.TagName)
 
-	// 7. Stop running server if any.
+	// 8. Stop running server if any.
 	stopIfRunning()
 }
 
@@ -196,26 +209,92 @@ func opcodeAssetName() (string, error) {
 	return fmt.Sprintf("opcode_%s_%s.tar.gz", osName, archName), nil
 }
 
-// --- Download + Replace ---
+// --- Checksum helpers ---
 
-func downloadAndExtractRelease(url string) (binPath, tmpDir string, err error) {
-	client := &http.Client{Timeout: 120 * time.Second}
-	resp, err := client.Get(url) //nolint:gosec // trusted GitHub release URL
+// loadExpectedChecksum fetches checksums.txt from the release and returns the
+// expected SHA-256 for assetName. Returns "" if checksums.txt is missing or
+// does not contain an entry (backward-compat with old releases).
+func loadExpectedChecksum(release *githubRelease, assetName string) string {
+	csAsset := findChecksumAsset(release)
+	if csAsset == nil {
+		fmt.Fprintln(os.Stderr, "Warning: release has no checksums.txt — skipping verification")
+		return ""
+	}
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Get(csAsset.BrowserDownloadURL) //nolint:gosec // trusted GitHub release URL
 	if err != nil {
-		return "", "", err
+		fmt.Fprintf(os.Stderr, "Warning: cannot download checksums.txt: %v — skipping verification\n", err)
+		return ""
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", "", fmt.Errorf("download returned %d", resp.StatusCode)
+		fmt.Fprintf(os.Stderr, "Warning: checksums.txt returned %d — skipping verification\n", resp.StatusCode)
+		return ""
 	}
 
+	checksums, err := parseChecksumFile(resp.Body)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: cannot parse checksums.txt: %v — skipping verification\n", err)
+		return ""
+	}
+
+	hash, ok := checksums[assetName]
+	if !ok {
+		fmt.Fprintf(os.Stderr, "Warning: no checksum for %s in checksums.txt — skipping verification\n", assetName)
+		return ""
+	}
+	return hash
+}
+
+func findChecksumAsset(release *githubRelease) *githubAsset {
+	for i := range release.Assets {
+		if release.Assets[i].Name == "checksums.txt" {
+			return &release.Assets[i]
+		}
+	}
+	return nil
+}
+
+// --- Download + Verify + Replace ---
+
+func downloadVerifyAndExtract(url, expectedHash string) (binPath, tmpDir string, err error) {
 	tmpDir, err = os.MkdirTemp("", "opcode-update-*")
 	if err != nil {
 		return "", "", err
 	}
 
-	if err := extractTarGz(resp.Body, tmpDir, "opcode"); err != nil {
+	client := &http.Client{Timeout: 120 * time.Second}
+	archivePath, err := downloadToTempFile(url, tmpDir, client)
+	if err != nil {
+		os.RemoveAll(tmpDir)
+		return "", "", err
+	}
+
+	// Verify checksum if expected hash is available.
+	if expectedHash != "" {
+		actual, err := sha256File(archivePath)
+		if err != nil {
+			os.RemoveAll(tmpDir)
+			return "", "", fmt.Errorf("computing checksum: %w", err)
+		}
+		if actual != expectedHash {
+			os.RemoveAll(tmpDir)
+			return "", "", fmt.Errorf("checksum mismatch: expected %s, got %s", expectedHash, actual)
+		}
+		fmt.Println("Checksum verified")
+	}
+
+	// Extract binary from verified archive.
+	f, err := os.Open(archivePath)
+	if err != nil {
+		os.RemoveAll(tmpDir)
+		return "", "", err
+	}
+	defer f.Close()
+
+	if err := extractTarGz(f, tmpDir, "opcode"); err != nil {
 		os.RemoveAll(tmpDir)
 		return "", "", err
 	}
