@@ -4,7 +4,7 @@ description: >
   Agent-first workflow orchestration engine exposed via MCP (SSE daemon).
   Defines, executes, monitors, and signals workflows with 6 MCP tools.
   Supports DAG-based execution, 6 step types (action, condition, loop,
-  parallel, wait, reasoning), 25 built-in actions, ${{}} interpolation,
+  parallel, wait, reasoning), 26 built-in actions, ${{}} interpolation,
   reasoning nodes for human-in-the-loop decisions, and secret vault.
   Use when defining workflows, running templates, checking status,
   sending signals, querying workflow history, or visualizing DAGs.
@@ -398,6 +398,7 @@ See [expressions.md](references/expressions.md) for CEL, GoJQ, Expr engine detai
 | **Shell**      | `shell.exec`                                                                                            |
 | **Crypto**     | `crypto.hash`, `crypto.hmac`, `crypto.uuid`                                                             |
 | **Assert**     | `assert.equals`, `assert.contains`, `assert.matches`, `assert.schema`                                   |
+| **Expression** | `expr.eval`                                                                                            |
 | **Workflow**   | `workflow.run`, `workflow.emit`, `workflow.context`, `workflow.fail`, `workflow.log`, `workflow.notify` |
 
 **Quick reference** (most-used actions):
@@ -407,7 +408,9 @@ See [expressions.md](references/expressions.md) for CEL, GoJQ, Expr engine detai
 - **`fs.read`**: `path` (req), `encoding` -- output: `{ path, content, encoding, size }`
 - **`workflow.notify`**: `message` (req), `data` -- output: `{ notified: true/false }` -- pushes real-time notification to agent via MCP SSE (best-effort)
 
-See [actions.md](references/actions.md) for full parameter specs of all 25 actions.
+- **`expr.eval`**: `expression` (req), `data` -- output: `{ result: <value> }` -- evaluates Expr expression against workflow scope (steps, inputs, workflow, context)
+
+See [actions.md](references/actions.md) for full parameter specs of all 26 actions.
 
 ## Scripting with shell.exec
 

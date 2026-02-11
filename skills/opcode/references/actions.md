@@ -205,6 +205,31 @@ String: substring check. Array: element membership.
 | `schema`  | object | yes      | JSON Schema (Draft 2020-12) |
 | `message` | string | no       | Custom failure message      |
 
+## Expression Actions
+
+### expr.eval
+
+Evaluate an [Expr](https://expr-lang.org/) expression against the current workflow scope or explicit data. Uses a compiled program cache for repeated evaluations.
+
+| Param        | Type   | Required | Default | Description                          |
+| ------------ | ------ | -------- | ------- | ------------------------------------ |
+| `expression` | string | yes      | -       | Expr expression to evaluate          |
+| `data`       | any    | no       | -       | Explicit data available as `data` var |
+
+**Scope**: The action context includes `steps`, `inputs`, `workflow`, and `context` — same namespaces as `${{}}` interpolation but accessed directly (e.g., `steps['fetch-data'].body.count`, not `steps.fetch-data.output.body.count`).
+
+**Output**: `{ "result": <evaluated_value> }`
+
+**Available functions**: `filter`, `map`, `count`, `len`, `sum`, `min`, `max`, `any`, `all`, and all standard Expr builtins.
+
+**Examples**:
+
+```json
+{ "expression": "filter(steps['fetch-data'].body.items, {.score >= inputs.threshold})" }
+{ "expression": "len(filter(data, {.level == 'ERROR'}))", "data": [{"level": "ERROR"}, {"level": "INFO"}] }
+{ "expression": "sum(items, {#})", "data": [1, 2, 3] }
+```
+
 ## Workflow Actions
 
 ### workflow.run

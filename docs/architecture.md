@@ -16,6 +16,7 @@ opcode/
 │   │   ├── shell.go             # Shell action (shell.exec) with isolator integration
 │   │   ├── crypto.go            # Crypto actions (crypto.hash, crypto.hmac, crypto.uuid, crypto.encode, crypto.decode)
 │   │   ├── assert.go            # Assertion actions (assert.equal, assert.schema, assert.truthy)
+│   │   ├── expr.go              # Expression action (expr.eval) wrapping ExprEngine with compiled program cache
 │   │   └── workflow.go          # Workflow actions (workflow.run, workflow.emit, workflow.context, workflow.fail, workflow.log, workflow.notify)
 │   ├── engine/                  # Core execution engine
 │   │   ├── executor.go          # Executor interface + implementation (Run, Resume, Signal, Extend, Cancel, Status)
