@@ -14,7 +14,7 @@ compatibility: >
   Runs as SSE daemon on macOS and Linux.
   Linux: cgroups v2 for process isolation. macOS: timeout-only fallback.
 metadata:
-  version: "1.2.0"
+  version: "1.2.1"
   transport: "sse"
   author: "rendis"
   repository: "https://github.com/rendis/opcode"
@@ -87,15 +87,15 @@ See [operations.md](references/operations.md) for full configuration, subcommand
 
 Registers a reusable workflow template. Version auto-increments (v1, v2, v3...).
 
-| Param           | Type   | Required | Description                                                                                      |
-| --------------- | ------ | -------- | ------------------------------------------------------------------------------------------------ |
-| `name`          | string | yes      | Template name                                                                                    |
-| `definition`    | object | yes      | Workflow definition (see below)                                                                  |
-| `agent_id`      | string | yes      | Defining agent ID                                                                                |
-| `description`   | string | no       | Template description                                                                             |
-| `input_schema`  | object | no       | JSON Schema for input validation                                                                 |
-| `output_schema` | object | no       | JSON Schema for output validation                                                                |
-| `triggers`      | object | no       | Trigger config (see [workflow-schema.md](references/workflow-schema.md#triggers-template-level)) |
+| Param           | Type   | Required | Description                                                                                     |
+| --------------- | ------ | -------- | ----------------------------------------------------------------------------------------------- |
+| `name`          | string | yes      | Template name                                                                                   |
+| `definition`    | object | yes      | Workflow definition (see below)                                                                 |
+| `agent_id`      | string | yes      | Defining agent ID                                                                               |
+| `description`   | string | no       | Template description                                                                            |
+| `input_schema`  | object | no       | JSON Schema for input validation                                                                |
+| `output_schema` | object | no       | JSON Schema for output validation                                                               |
+| `triggers`      | object | no       | Trigger config (see[workflow-schema.md](references/workflow-schema.md#triggers-template-level)) |
 
 **Returns**: `{ "name": "...", "version": "v1" }`
 
@@ -248,7 +248,7 @@ Generates a visual DAG diagram from a template or running workflow.
 | `steps`       | StepDefinition[] | yes      | Workflow steps                                    |
 | `inputs`      | object           | no       | Input parameters (supports `${{}}`)               |
 | `context`     | object           | no       | Workflow context, accessible via `${{context.*}}` |
-| `timeout`     | string           | no       | Workflow deadline (e.g., `"5m"`, `"1h"`)          |
+| `timeout`     | string           | no       | Workflow deadline (e.g.,`"5m"`, `"1h"`)           |
 | `on_timeout`  | string           | no       | `fail` (default), `suspend`, `cancel`             |
 | `on_complete` | StepDefinition   | no       | Hook step after completion                        |
 | `on_error`    | StepDefinition   | no       | Hook step on workflow failure                     |
