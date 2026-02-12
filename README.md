@@ -1,21 +1,21 @@
 <div align="center">
   <img src="assets/gopher.png" alt="OPCODE Gopher" width="160"/>
 
-  <picture>
+<picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/banner-dark.svg">
     <img alt="OPCODE — Agent-first workflow orchestration engine" src="assets/banner-light.svg" width="100%">
   </picture>
 
-  <a href="https://go.dev"><img src="https://img.shields.io/badge/Go-1.25+-00ADD8?style=flat&logo=go" alt="Go Version"></a>
-  <a href="https://pkg.go.dev/github.com/rendis/opcode"><img src="https://pkg.go.dev/badge/github.com/rendis/opcode.svg" alt="Go Reference"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License"></a>
-  <a href="https://goreportcard.com/report/github.com/rendis/opcode"><img src="https://goreportcard.com/badge/github.com/rendis/opcode" alt="Go Report Card"></a>
-  <a href="https://github.com/rendis/opcode/releases"><img src="https://img.shields.io/github/v/release/rendis/opcode" alt="Latest Release"></a>
-  <a href="https://github.com/rendis/opcode/commits/main"><img src="https://img.shields.io/github/last-commit/rendis/opcode" alt="Last Commit"></a>
-  <a href="https://github.com/rendis/opcode"><img src="https://img.shields.io/github/repo-size/rendis/opcode" alt="Repo Size"></a>
-  <a href="https://github.com/rendis/opcode/graphs/contributors"><img src="https://img.shields.io/github/contributors/rendis/opcode" alt="Contributors"></a>
-  <a href="#agent-skill"><img src="https://img.shields.io/badge/AI_Agents-Skill_Available-8A2BE2?style=flat" alt="AI Agent Skill"></a>
-  <a href="https://deepwiki.com/rendis/opcode"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"></a>
+`<a href="https://go.dev"><img src="https://img.shields.io/badge/Go-1.25+-00ADD8?style=flat&logo=go" alt="Go Version">``</a>`
+`<a href="https://pkg.go.dev/github.com/rendis/opcode"><img src="https://pkg.go.dev/badge/github.com/rendis/opcode.svg" alt="Go Reference">``</a>`
+`<a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License">``</a>`
+`<a href="https://goreportcard.com/report/github.com/rendis/opcode"><img src="https://goreportcard.com/badge/github.com/rendis/opcode" alt="Go Report Card">``</a>`
+`<a href="https://github.com/rendis/opcode/releases"><img src="https://img.shields.io/github/v/release/rendis/opcode" alt="Latest Release">``</a>`
+`<a href="https://github.com/rendis/opcode/commits/main"><img src="https://img.shields.io/github/last-commit/rendis/opcode" alt="Last Commit">``</a>`
+`<a href="https://github.com/rendis/opcode"><img src="https://img.shields.io/github/repo-size/rendis/opcode" alt="Repo Size">``</a>`
+`<a href="https://github.com/rendis/opcode/graphs/contributors"><img src="https://img.shields.io/github/contributors/rendis/opcode" alt="Contributors">``</a>`
+`<a href="#agent-skill"><img src="https://img.shields.io/badge/AI_Agents-Skill_Available-8A2BE2?style=flat" alt="AI Agent Skill">``</a>`
+`<a href="https://deepwiki.com/rendis/opcode"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki">``</a>`
 
 </div>
 
@@ -581,3 +581,13 @@ The script builds a Docker image and runs with `--privileged --cgroupns=host`. m
 
 1. Stop the existing process: `lsof -ti tcp:4100 | xargs kill`
 2. Use a different port: `opcode install --listen-addr :4200`
+
+## License
+
+[MIT](LICENSE) — Copyright (c) 2025 rendis
+
+---
+
+<div align="center">
+  <sub>Built for agents that think in workflows.</sub>
+</div>
