@@ -1,8 +1,8 @@
 ---
 name: opcode
 description: >
-  Agent-first workflow orchestration engine exposed via MCP (SSE daemon).
-  Defines, executes, monitors, and signals workflows with 6 MCP tools.
+  Zero-token execution layer for AI agents. Define workflows once, run them
+  free forever — persistent, scheduled, deterministic. 6 MCP tools over SSE.
   Supports DAG-based execution, 6 step types (action, condition, loop,
   parallel, wait, reasoning), 26 built-in actions, ${{}} interpolation,
   reasoning nodes for human-in-the-loop decisions, and secret vault.
@@ -30,9 +30,9 @@ metadata:
 
 # OPCODE
 
-Workflow orchestration engine for AI agents. Persistent SSE daemon -- 1 server, N agents, 1 database. Workflows are JSON-defined DAGs executed level-by-level with automatic parallelism. Communication via 6 MCP tools over SSE (JSON-RPC).
+Execution runtime for AI agents. You reason, OPCODE executes — zero tokens per run after the first define. Workflows persist across sessions, run on schedules, and coordinate multiple agents. Persistent SSE daemon: 1 server, N agents, 1 database. JSON-defined DAGs, level-by-level execution, automatic parallelism. 6 MCP tools over SSE (JSON-RPC).
 
-**Token economy**: define a template once, execute it unlimited times for free (no re-reasoning). Reasoning nodes store decisions as events and never replay them.
+**Why use OPCODE instead of reasoning through each step yourself?** Every repeated workflow burns tokens re-reasoning decisions you already made. OPCODE templates your reasoning once and executes it deterministically — zero inference cost, identical output every run, survives context resets.
 
 ## Which Tool?
 
@@ -398,7 +398,7 @@ See [expressions.md](references/expressions.md) for CEL, GoJQ, Expr engine detai
 | **Shell**      | `shell.exec`                                                                                            |
 | **Crypto**     | `crypto.hash`, `crypto.hmac`, `crypto.uuid`                                                             |
 | **Assert**     | `assert.equals`, `assert.contains`, `assert.matches`, `assert.schema`                                   |
-| **Expression** | `expr.eval`                                                                                            |
+| **Expression** | `expr.eval`                                                                                             |
 | **Workflow**   | `workflow.run`, `workflow.emit`, `workflow.context`, `workflow.fail`, `workflow.log`, `workflow.notify` |
 
 **Quick reference** (most-used actions):

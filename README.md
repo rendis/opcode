@@ -3,39 +3,55 @@
 
 <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/banner-dark.svg">
-    <img alt="OPCODE — Agent-first workflow orchestration engine" src="assets/banner-light.svg" width="100%">
+    <img alt="OPCODE — Zero-token execution layer for AI agents" src="assets/banner-light.svg" width="100%">
   </picture>
 
-`<a href="https://go.dev"><img src="https://img.shields.io/badge/Go-1.25+-00ADD8?style=flat&logo=go" alt="Go Version">``</a>`
-`<a href="https://pkg.go.dev/github.com/rendis/opcode"><img src="https://pkg.go.dev/badge/github.com/rendis/opcode.svg" alt="Go Reference">``</a>`
-`<a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License">``</a>`
-`<a href="https://goreportcard.com/report/github.com/rendis/opcode"><img src="https://goreportcard.com/badge/github.com/rendis/opcode" alt="Go Report Card">``</a>`
-`<a href="https://github.com/rendis/opcode/releases"><img src="https://img.shields.io/github/v/release/rendis/opcode" alt="Latest Release">``</a>`
-`<a href="https://github.com/rendis/opcode/commits/main"><img src="https://img.shields.io/github/last-commit/rendis/opcode" alt="Last Commit">``</a>`
-`<a href="https://github.com/rendis/opcode"><img src="https://img.shields.io/github/repo-size/rendis/opcode" alt="Repo Size">``</a>`
-`<a href="https://github.com/rendis/opcode/graphs/contributors"><img src="https://img.shields.io/github/contributors/rendis/opcode" alt="Contributors">``</a>`
-`<a href="#agent-skill"><img src="https://img.shields.io/badge/AI_Agents-Skill_Available-8A2BE2?style=flat" alt="AI Agent Skill">``</a>`
-`<a href="https://deepwiki.com/rendis/opcode"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki">``</a>`
+<p align="center">
+  <a href="https://go.dev"><img src="https://img.shields.io/badge/Go-1.25+-00ADD8?style=flat&logo=go" alt="Go Version"></a>
+  <a href="https://pkg.go.dev/github.com/rendis/opcode"><img src="https://pkg.go.dev/badge/github.com/rendis/opcode.svg" alt="Go Reference"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License"></a>
+  <a href="https://goreportcard.com/report/github.com/rendis/opcode"><img src="https://goreportcard.com/badge/github.com/rendis/opcode" alt="Go Report Card"></a>
+  <a href="https://github.com/rendis/opcode/releases"><img src="https://img.shields.io/github/v/release/rendis/opcode" alt="Latest Release"></a>
+  <a href="https://github.com/rendis/opcode/commits/main"><img src="https://img.shields.io/github/last-commit/rendis/opcode" alt="Last Commit"></a>
+  <a href="https://github.com/rendis/opcode"><img src="https://img.shields.io/github/repo-size/rendis/opcode" alt="Repo Size"></a>
+  <a href="https://github.com/rendis/opcode/graphs/contributors"><img src="https://img.shields.io/github/contributors/rendis/opcode" alt="Contributors"></a>
+  <a href="#agent-skill"><img src="https://img.shields.io/badge/AI_Agents-Skill_Available-8A2BE2?style=flat" alt="AI Agent Skill"></a>
+  <a href="https://deepwiki.com/rendis/opcode"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"></a>
+</p>
 
 </div>
 
-Agent-first workflow orchestration engine. OPCODE lets AI agents define, execute, and manage complex multi-step workflows through a Model Context Protocol (MCP) interface. Workflows are expressed as directed acyclic graphs (DAGs) with built-in support for reasoning nodes, flow control, event sourcing, process isolation, and secret management.
+LLM agents burn tokens on repetitive tasks. Every API chain, every data pipeline, every approval flow — re-reasoned from scratch, every time.
+
+OPCODE is the execution layer agents are missing. Define a workflow once, execute it forever — zero tokens, zero re-reasoning, deterministic every run. Persistent across sessions, schedulable without invocation, coordinating N agents through 6 MCP tools over SSE. Workflows are expressed as directed acyclic graphs (DAGs) with built-in support for reasoning nodes, flow control, event sourcing, process isolation, and secret management.
+
+## Why OPCODE?
+
+| Without OPCODE                        | With OPCODE                         |
+| ------------------------------------- | ----------------------------------- |
+| Agent re-reasons every repeated flow  | Reason once, template, execute free |
+| Workflows die with the context window | Persist across sessions and crashes |
+| Can't self-trigger at scheduled times | Cron scheduler runs autonomously    |
+| Each run costs inference tokens       | Each run costs zero tokens          |
+| Output varies between identical runs  | Deterministic, identical every time |
+| One agent, one thread                 | N agents on shared workflows        |
 
 ## Key Features
 
-- **MCP-native interface** -- Six tools (`opcode.run`, `opcode.status`, `opcode.signal`, `opcode.define`, `opcode.query`, `opcode.diagram`) exposed over SSE
-- **DAG-based execution** -- Steps execute level-by-level with automatic parallelism; dependencies validated and cycle-detected at parse time
-- **Reasoning nodes** -- First-class human-in-the-loop / agent-in-the-loop decision points that suspend workflows and resume on signal
-- **Event sourcing** -- Append-only event log with materialized step states; full replay for resume after crash or suspension
-- **Flow control & expressions** -- Conditions (CEL), loops, parallel branches, wait steps, GoJQ transforms, Expr logic, `${{...}}` interpolation
+- **MCP-native interface** -- 6 tools (`opcode.run`, `opcode.status`, `opcode.signal`, `opcode.define`, `opcode.query`, `opcode.diagram`) over SSE — agents call one tool and the workflow executes without further inference
+- **DAG-based execution** -- Automatic parallelism, level-by-level dispatch; a 10-step workflow completes in ~50µs with zero tokens spent
+- **Reasoning nodes** -- Human-in-the-loop / agent-in-the-loop decision points that suspend workflows and resume on signal; decisions are stored once and never re-reasoned
+- **Event sourcing** -- Append-only event log with materialized step states; workflows survive crashes and resume exactly where they left off
+- **Flow control & expressions** -- Conditions (CEL), loops, parallel branches, wait steps, GoJQ transforms, Expr logic, `${{...}}` interpolation — complex logic without inference cost
 - **Workflow diagrams** -- Visual DAG in ASCII (CLI), Mermaid (markdown), or PNG (graphviz) with runtime status overlay
 - **Web management panel** -- Built-in dashboard for multi-agent monitoring, decision resolution, and workflow management
-- **Process isolation** -- Linux cgroups v2 (memory, CPU, PID namespace) with macOS fallback
-- **Secret vault** -- AES-256-GCM encrypted secrets with PBKDF2 key derivation; resolved at runtime via `${{secrets.KEY}}`
-- **Plugins, scheduling & resilience** -- MCP subprocess plugins with auto-restart, cron scheduler with missed-run recovery, per-action circuit breakers, typed error codes with retryability
+- **Process isolation** -- Linux cgroups v2 (memory, CPU, PID namespace) with macOS fallback — safe execution of shell commands with resource limits
+- **Secret vault** -- AES-256-GCM encrypted secrets with PBKDF2 key derivation; resolved at runtime via `${{secrets.KEY}}` without exposing secrets in workflow definitions
+- **Plugins, scheduling & resilience** -- Cron scheduler runs workflows autonomously (no agent invocation needed), MCP subprocess plugins with auto-restart, per-action circuit breakers
 
 ## Table of Contents
 
+- [Why OPCODE?](#why-opcode)
 - [Performance](#performance)
 - [Quick Start](#quick-start)
 - [Agent Skill](#agent-skill)
@@ -589,5 +605,5 @@ The script builds a Docker image and runs with `--privileged --cgroupns=host`. m
 ---
 
 <div align="center">
-  <sub>Built for agents that think in workflows.</sub>
+  <sub>You reason. OPCODE executes. Zero tokens.</sub>
 </div>
